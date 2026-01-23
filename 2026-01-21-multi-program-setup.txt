@@ -1,0 +1,104 @@
+                                                                                
+ ▐▛███▜▌   Claude Code v2.1.14                                                  
+▝▜█████▛▘  Sonnet 4.5 · API Usage Billing                                       
+  ▘▘ ▝▝    ~/src/solana/shank                                                   
+                                                                                
+❯ @2026-01-21-architecture.txt for context.                                     
+                                                                                
+  Find out how to use shank correctly in a multi-program setup.                 
+  Currently we run it separately for every program.                             
+  When it references a type from another program, it outputs a defined          
+  node.                                                                         
+  But we rather need it to be a link node, if that's possible.                  
+  On the other hand, when using Codama further for code generation, we          
+  could collect all the IDLs into the same root node, so maybe that's a         
+  better solution.                                                              
+  ⎿  Read 2026-01-21-architecture.txt (418 lines)                               
+                                                                                
+⏺ I'll investigate how Shank handles cross-program type references and whether  
+  it supports link nodes for multi-program setups.                              
+                                                                                
+⏺ Explore(Explore IDL type system)                                              
+  ⎿  Done (25 tool uses · 89.3k tokens · 3m 54s)                                
+                                                                                
+⏺ Based on my exploration of the codebase, here's what I found about            
+  multi-program setups in Shank:                                                
+                                                                                
+  Current State: No Link Node Support                                           
+                                                                                
+  Shank does NOT support "link" nodes for cross-program type references.        
+                                                                                
+  The IdlType enum in shank-idl/src/idl_type.rs:10-41 only has:                 
+  - Defined(String) - for custom types (what you're seeing now)                 
+  - No variant for linking to external programs                                 
+                                                                                
+  When a program references a type from another program, Shank always outputs:  
+  { "defined": "TypeName" }                                                     
+                                                                                
+  There's no mechanism to specify which program the type comes from.            
+                                                                                
+  Why This Limitation Exists                                                    
+                                                                                
+  Shank operates at the single-program level by design:                         
+  1. It analyzes one program's source code at a time                            
+  2. Type resolution is purely by name within that program's IDL                
+  3. The IDL metadata only contains origin and address, no inter-program        
+  references                                                                    
+                                                                                
+  From shank-idl/src/file.rs, the orchestration is:                             
+  - Parse one crate's files                                                     
+  - Extract all types, instructions, accounts, errors from that crate only      
+  - Generate a self-contained IDL                                               
+                                                                                
+  Recommended Solution: Use Codama for Multi-Program Coordination               
+                                                                                
+  Your instinct is correct - handling this at the Codama level is the proper    
+  approach:                                                                     
+                                                                                
+  1. Generate separate IDLs per program (current setup ✓)                       
+  # For each program                                                            
+  shank idl -r ./program-a -o ./idls/program-a                                  
+  shank idl -r ./program-b -o ./idls/program-b                                  
+  2. Collect all IDLs into a single Codama root node                            
+  // Codama can merge multiple program IDLs                                     
+  const programA = createFromIdl(programAIdl);                                  
+  const programB = createFromIdl(programBIdl);                                  
+  const root = rootNode([programA, programB]);                                  
+  3. Codama resolves cross-program type references                              
+    - It can detect when program-b references a type from program-a             
+    - It has the full context of all programs to resolve these references       
+    - It can generate proper TypeScript imports/exports                         
+                                                                                
+  Alternative Workarounds (Not Recommended)                                     
+                                                                                
+  If you absolutely need link nodes in the IDL format, you would need to:       
+                                                                                
+  1. Extend Shank's IDL format by modifying:                                    
+    - shank-idl/src/idl_type.rs - Add Link { program: String, type: String }    
+  variant                                                                       
+    - shank-idl/src/file.rs - Detect cross-crate type references during parsing 
+    - This would be a significant architectural change                          
+  2. Post-process IDLs with a custom script:                                    
+    - Run shank idl for all programs                                            
+    - Parse the generated IDLs                                                  
+    - Detect shared types (by name matching)                                    
+    - Replace { "defined": "SharedType" } with { "link": { "program": "...",    
+  "type": "..." } }                                                             
+    - This is fragile and error-prone                                           
+                                                                                
+  Recommendation                                                                
+                                                                                
+  Stick with your Codama approach:                                              
+  - ✅ Generate separate IDLs per program with Shank                            
+  - ✅ Let Codama handle cross-program type coordination                        
+  - ✅ This is the intended workflow and leverages each tool's strengths        
+                                                                                
+  Shank focuses on extracting IDL from a single program accurately. Codama      
+  focuses on multi-program coordination and code generation. The division of    
+  responsibility makes sense architecturally.                                   
+                                                                                
+  Would you like me to look into how Codama/Kinobi handles cross-program type   
+  references, or do you need help setting up the multi-IDL collection in Codama?
+                                                                                
+✻ Baked for 1m 32s                                                              
+
