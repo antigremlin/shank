@@ -1,8 +1,9 @@
-use anyhow::Result;
+use anyhow::{bail, Context, Result};
 
 use std::{
+    collections::{HashMap, HashSet},
     convert::{TryFrom, TryInto},
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 use crate::{
@@ -12,6 +13,7 @@ use crate::{
     idl_metadata::IdlMetadata,
     idl_type::IdlType,
     idl_type_definition::IdlTypeDefinition,
+    manifest::Manifest,
 };
 use shank_macro_impl::{
     account::extract_account_structs,
@@ -21,6 +23,8 @@ use shank_macro_impl::{
     instruction::extract_instruction_enums,
     krate::CrateContext,
     macros::ProgramId,
+    parsed_struct::StructAttr,
+    shank_import::ShankImport,
 };
 
 // -----------------
@@ -65,13 +69,15 @@ pub fn parse_file(
     filename: impl AsRef<Path>,
     config: &ParseIdlConfig,
 ) -> Result<Option<Idl>> {
+    let filename = filename.as_ref();
     let ctx = CrateContext::parse(filename)?;
+    let import_root = resolve_import_root(filename)?;
 
     let constants = constants(&ctx)?;
     let instructions = instructions(&ctx)?;
     let state = state(&ctx)?;
     let accounts = accounts(&ctx)?;
-    let types = types(&ctx, &config.detect_custom_struct)?;
+    let types = types(&ctx, &config.detect_custom_struct, &import_root)?;
     let events = events(&ctx)?;
     let errors = errors(&ctx)?;
     let metadata = metadata(
@@ -145,6 +151,7 @@ fn state(_ctx: &CrateContext) -> Result<Option<IdlState>> {
 fn types(
     ctx: &CrateContext,
     detect_custom_type: &DetectCustomTypeConfig,
+    import_root: &Path,
 ) -> Result<Vec<IdlTypeDefinition>> {
     let custom_structs = ctx
         .structs()
@@ -158,13 +165,160 @@ fn types(
         .map(|x| CustomEnum::try_from(x).map_err(parse_error_into))
         .collect::<Result<Vec<CustomEnum>>>()?;
 
-    let types = custom_structs
-        .into_iter()
-        .map(IdlTypeDefinition::try_from)
-        .chain(custom_enums.into_iter().map(IdlTypeDefinition::try_from))
-        .collect::<Result<Vec<IdlTypeDefinition>>>()?;
+    let mut import_cache: HashMap<PathBuf, Idl> = HashMap::new();
+    let mut seen = HashSet::new();
+    let mut types = Vec::new();
+
+    for strct in custom_structs {
+        let name = strct.ident.to_string();
+        let type_def = if let Some(import) = &strct.import {
+            let mut imported = resolve_imported_definition(
+                import_root,
+                import,
+                &name,
+                &mut import_cache,
+            )?;
+            apply_pod_sentinel_override(&mut imported, &strct)?;
+            imported
+        } else {
+            IdlTypeDefinition::try_from(strct)?
+        };
+
+        if !seen.insert(type_def.name.clone()) {
+            bail!("Duplicate type definition '{}'", type_def.name);
+        }
+        types.push(type_def);
+    }
+
+    for enm in custom_enums {
+        let name = enm.ident.to_string();
+        let type_def = if let Some(import) = &enm.import {
+            resolve_imported_definition(
+                import_root,
+                import,
+                &name,
+                &mut import_cache,
+            )?
+        } else {
+            IdlTypeDefinition::try_from(enm)?
+        };
+
+        if !seen.insert(type_def.name.clone()) {
+            bail!("Duplicate type definition '{}'", type_def.name);
+        }
+        types.push(type_def);
+    }
 
     Ok(types)
+}
+
+fn resolve_import_root(filename: &Path) -> Result<PathBuf> {
+    let start = filename
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .to_path_buf();
+    if let Some(manifest) = Manifest::discover_from_path(start.clone())? {
+        if let Some(root) = manifest.path().parent() {
+            return Ok(root.to_path_buf());
+        }
+    }
+    Ok(start)
+}
+
+fn resolve_imported_definition(
+    import_root: &Path,
+    import: &ShankImport,
+    local_name: &str,
+    cache: &mut HashMap<PathBuf, Idl>,
+) -> Result<IdlTypeDefinition> {
+    let path = resolve_import_path(import_root, &import.import_from);
+    let idl = load_import_idl(&path, cache)?;
+    let external_name = import.rename.as_deref().unwrap_or(local_name);
+    let mut def = find_imported_definition(&idl, external_name)
+        .cloned()
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "Type '{}' not found in imported IDL {}",
+                external_name,
+                path.display()
+            )
+        })?;
+    def.name = local_name.to_string();
+    Ok(def)
+}
+
+fn resolve_import_path(import_root: &Path, import_from: &str) -> PathBuf {
+    let looks_like_path = import_from.contains('/')
+        || import_from.contains('\\')
+        || import_from.ends_with(".json");
+    if looks_like_path {
+        let path = Path::new(import_from);
+        if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            import_root.join(path)
+        }
+    } else {
+        import_root.join("idl").join(format!("{}.json", import_from))
+    }
+}
+
+fn load_import_idl(
+    path: &Path,
+    cache: &mut HashMap<PathBuf, Idl>,
+) -> Result<Idl> {
+    if let Some(idl) = cache.get(path) {
+        return Ok(idl.clone());
+    }
+    let contents = std::fs::read_to_string(path).with_context(|| {
+        format!("Failed to read imported IDL at {}", path.display())
+    })?;
+    let idl: Idl = serde_json::from_str(&contents).with_context(|| {
+        format!("Failed to parse imported IDL at {}", path.display())
+    })?;
+    cache.insert(path.to_path_buf(), idl.clone());
+    Ok(idl)
+}
+
+fn find_imported_definition<'a>(
+    idl: &'a Idl,
+    name: &str,
+) -> Option<&'a IdlTypeDefinition> {
+    idl.types
+        .iter()
+        .find(|def| def.name == name)
+        .or_else(|| idl.accounts.iter().find(|def| def.name == name))
+}
+
+fn apply_pod_sentinel_override(
+    type_def: &mut IdlTypeDefinition,
+    strct: &CustomStruct,
+) -> Result<()> {
+    let pod_sentinel = strct
+        .0
+        .struct_attrs
+        .items_ref()
+        .iter()
+        .find_map(|attr| match attr {
+            StructAttr::PodSentinel(sentinel) => Some(sentinel.clone()),
+            _ => None,
+        });
+
+    if let Some(local) = pod_sentinel {
+        if let Some(existing) = &type_def.pod_sentinel {
+            if existing != &local {
+                bail!(
+                    "Proxy type '{}' defines pod_sentinel {:?} but imported type has {:?}",
+                    type_def.name,
+                    local,
+                    existing
+                );
+            }
+        }
+        type_def.pod_sentinel = Some(local);
+    }
+
+    Ok(())
 }
 
 fn metadata(

@@ -380,6 +380,21 @@ pub fn shank_context(input: TokenStream) -> TokenStream {
 ///
 /// # Type Attributes
 ///
+/// ## `#[shank(import_from = "...", rename = "...")]` attribute
+///
+/// Marks a proxy type whose definition should be imported from another IDL JSON.
+/// `import_from` points to an IDL name (resolved as `idl/<name>.json`) or a path
+/// to a JSON file. `rename` selects the type name inside the imported IDL; when
+/// omitted, the local type name is used.
+///
+/// ```
+/// use shank::ShankType;
+///
+/// #[derive(ShankType)]
+/// #[shank(import_from = "spl_token", rename = "Account")]
+/// pub struct TokenAccount;
+/// ```
+///
 /// ## `#[pod_sentinel(...)]` attribute
 ///
 /// Specifies the sentinel value for custom types used with `PodOption`. This is required when
@@ -410,7 +425,7 @@ pub fn shank_context(input: TokenStream) -> TokenStream {
 /// with `ShankType`, `BorshSerialize` or `BorshDeserialize`.
 #[proc_macro_derive(
     ShankType,
-    attributes(idl_name, idl_type, skip, pod_sentinel)
+    attributes(idl_name, idl_type, skip, pod_sentinel, shank)
 )]
 pub fn shank_type(_input: TokenStream) -> TokenStream {
     // returns the token stream that was passed in (the macro is only an annotation for shank-idl

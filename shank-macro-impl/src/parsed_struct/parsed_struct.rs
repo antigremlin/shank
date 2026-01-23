@@ -9,7 +9,10 @@ use syn::{
     Result as ParseResult,
 };
 
-use crate::{parsed_struct::struct_attr::StructAttrs, types::RustType};
+use crate::{
+    parsed_struct::struct_attr::StructAttrs, shank_import::ShankImport,
+    types::RustType,
+};
 
 use super::struct_field_attr::{StructFieldAttr, StructFieldAttrs};
 
@@ -91,6 +94,7 @@ pub struct ParsedStruct {
     pub fields: Vec<StructField>,
     pub attrs: Vec<Attribute>,
     pub struct_attrs: StructAttrs,
+    pub import: Option<ShankImport>,
 }
 
 impl Parse for ParsedStruct {
@@ -109,6 +113,7 @@ impl TryFrom<&ItemStruct> for ParsedStruct {
     type Error = ParseError;
 
     fn try_from(item: &ItemStruct) -> ParseResult<Self> {
+        let import = ShankImport::from_attrs(item.attrs.as_slice())?;
         let fields = match &item.fields {
             syn::Fields::Named(fields) => fields
                 .named
@@ -117,6 +122,7 @@ impl TryFrom<&ItemStruct> for ParsedStruct {
                 .filter(|f| !field_has_skip_attr(f))
                 .map(StructField::try_from)
                 .collect::<ParseResult<Vec<StructField>>>()?,
+            _ if import.is_some() => Vec::new(),
             _ => {
                 return Err(ParseError::new_spanned(
                     &item.fields,
@@ -130,6 +136,7 @@ impl TryFrom<&ItemStruct> for ParsedStruct {
             fields,
             attrs: item.attrs.clone(),
             struct_attrs,
+            import,
         })
     }
 }
