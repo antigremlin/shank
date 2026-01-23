@@ -1,5 +1,5 @@
 use shank::ShankType;
 
 #[derive(ShankType)]
-#[shank(import_from = "external", rename = "ExternalEnum")]
+#[shank(import_from = "tests/fixtures/types/idl/external.json", rename = "ExternalEnum")]
 pub enum LocalEnum {}
