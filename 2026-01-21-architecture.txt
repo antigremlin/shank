@@ -1,0 +1,417 @@
+                                                                                
+ ▐▛███▜▌   Claude Code v2.1.14                                                  
+▝▜█████▛▘  Sonnet 4.5 · API Usage Billing                                       
+  ▘▘ ▝▝    ~/src/solana/shank                                                   
+                                                                                
+❯ Explore this repo and tell me about it.                                       
+                                                                                
+⏺ I'll explore the Shank repository to give you a comprehensive overview.       
+                                                                                
+⏺ Explore(Explore Shank codebase structure)                                     
+  ⎿  Done (42 tool uses · 87.4k tokens · 2m 29s)                                
+                                                                                
+⏺ Shank Repository Overview                                                     
+                                                                                
+  Shank is a Rust workspace that automatically extracts Interface Definition    
+  Language (IDL) files from Solana programs. It's developed by Metaplex         
+  Foundation and enables developers to annotate their Rust programs with macros,
+   then generate JSON IDL files consumed by TypeScript SDK generators like      
+  https://github.com/metaplex-foundation/solita.                                
+                                                                                
+  Architecture: 6 Core Crates                                                   
+                                                                                
+  The project has a clear layered design:                                       
+                                                                                
+  1. shank - Top-level API that re-exports all macros users need                
+  2. shank-macro - Procedural macro entry points                                
+  3. shank-macro-impl (~7,000 LOC) - Core implementation engine that parses     
+  attributes and validates annotations                                          
+  4. shank-idl (~15,000 LOC) - Analyzes source files and extracts IDL from      
+  annotations                                                                   
+  5. shank-render - Generates Rust code (PDA helpers, builders, contexts)       
+  6. shank-cli - Command-line tool that orchestrates everything                 
+                                                                                
+  Key Functionality                                                             
+                                                                                
+  Annotation-Driven IDL Generation:                                             
+  #[derive(ShankAccount)]                                                       
+  #[seeds("vault", program_id, owner("Owner pubkey", Pubkey))]                  
+  pub struct Vault {                                                            
+      pub amount: u64,                                                          
+      #[padding]                                                                
+      pub _reserved: [u8; 32],                                                  
+  }                                                                             
+                                                                                
+  #[derive(ShankInstruction)]                                                   
+  pub enum Instruction {                                                        
+      #[account(0, writable, name="vault")]                                     
+      #[account(1, signer, name="authority")]                                   
+      InitVault(InitVaultArgs),                                                 
+  }                                                                             
+                                                                                
+  This generates:                                                               
+  - JSON IDL with account/instruction metadata                                  
+  - PDA helper methods (shank_pda(), shank_seeds())                             
+  - Optional builder structs and account context parsers                        
+                                                                                
+  Technical Highlights                                                          
+                                                                                
+  - PodOption Support - Automatically generates sentinel values for fixed-size  
+  optionals                                                                     
+  - Flexible Type System - Handles primitives, composites (Vec, Array, HashMap),
+   and custom types                                                             
+  - Multi-Pass Analysis - Parse → Validate → Convert → Generate pipeline        
+  - Field Customization - #[skip], #[padding], #[idl_type], #[idl_name]         
+  attributes                                                                    
+  - Cross-Module Resolution - Full AST analysis via CrateContext for accurate   
+  type detection                                                                
+                                                                                
+  Workflow                                                                      
+                                                                                
+  Annotate Rust Program → cargo build (macros expand) →                         
+  shank idl → Analyze source AST → Generate JSON IDL →                          
+  Downstream tools generate TypeScript SDKs                                     
+                                                                                
+  The codebase is ~25,000 lines of well-organized Rust with extensive test      
+  fixtures. It's a critical piece of Solana developer tooling infrastructure.   
+                                                                                
+✻ Cogitated for 2m 17s                                                          
+                                                                                
+❯ Tell me more about (or point to docs if they exist):                          
+  - shank macros                                                                
+  - output IDL format                                                           
+  - CLI usage                                                                   
+                                                                                
+⏺ I'll explore the documentation and relevant source files to give you detailed 
+  information about these three areas.                                          
+                                                                                
+⏺ Search(pattern: "**/*.md")                                                    
+  ⎿  Found 8 files (ctrl+o to expand)                                           
+                                                                                
+⏺ Search(pattern: "**/README*")                                                 
+  ⎿  Found 7 files (ctrl+o to expand)                                           
+                                                                                
+⏺ Read(shank-macro/src/lib.rs)                                                  
+  ⎿  Read 425 lines                                                             
+                                                                                
+⏺ Read(README.md)                                                               
+  ⎿  Read 47 lines                                                              
+                                                                                
+⏺ Read(shank-cli/README.md)                                                     
+  ⎿  Read 51 lines                                                              
+                                                                                
+⏺ Read(shank-idl/README.md)                                                     
+  ⎿  Read 8 lines                                                               
+                                                                                
+⏺ Read(shank-idl/src/idl.rs)                                                    
+  ⎿  Read 69 lines                                                              
+                                                                                
+⏺ Search(pattern: "**/fixtures/**/*.json")                                      
+  ⎿  Found 29 files (ctrl+o to expand)                                          
+                                                                                
+⏺ Read(shank-idl/tests/fixtures/accounts/sample_crate/idl.json)                 
+  ⎿  Read 138 lines                                                             
+                                                                                
+⏺ Read(shank-idl/tests/fixtures/instructions/single_file/instruction_with_args.j
+      son)                                                                      
+  ⎿  Read 53 lines                                                              
+                                                                                
+⏺ Read(shank-idl/src/idl_instruction.rs)                                        
+  ⎿  Read 100 lines                                                             
+                                                                                
+⏺ Read(shank-idl/src/idl_type_definition.rs)                                    
+  ⎿  Read 80 lines                                                              
+                                                                                
+⏺ Great! Let me give you detailed information about these three areas:          
+                                                                                
+  1. Shank Macros                                                               
+                                                                                
+  Shank provides 5 main derive macros for annotating your Solana programs:      
+                                                                                
+  #[derive(ShankAccount)]                                                       
+                                                                                
+  Marks structs as accounts containing de/serializable data.                    
+                                                                                
+  Field Attributes:                                                             
+  - #[idl_type("TypeName")] - Override field type in IDL (useful for wrapper    
+  types or enums stored as primitives)                                          
+  - #[padding] - Mark field as padding in IDL                                   
+  - #[idl_name("name")] - Rename field in IDL while keeping Rust name           
+  - #[skip] - Exclude field from IDL entirely                                   
+                                                                                
+  Seeds (for PDAs):                                                             
+  #[derive(ShankAccount)]                                                       
+  #[seeds(                                                                      
+      "lit:prefix",                        // literal string (hardcoded)        
+      program_id,                          // program's public key              
+      pub_key("desc of the key"),          // Pubkey parameter (implicit)       
+      pub_key("desc", Pubkey),             // Pubkey parameter (explicit)       
+      id("desc of byte", u8),              // u8 parameter                      
+      name("desc of name", String)         // String parameter                  
+  )]                                                                            
+  struct MyAccount {                                                            
+      pub balance: u64,                                                         
+  }                                                                             
+                                                                                
+  Generated methods:                                                            
+  - MyAccount::shank_seeds<'a>(..) -> [&'a [u8]; N]                             
+  - MyAccount::shank_seeds_with_bump<'a>(.., bump) -> [&'a [u8]; N]             
+  - MyAccount::shank_pda(program_id, ..) -> (Pubkey, u8)                        
+  - MyAccount::shank_pda_with_bump(program_id, bump, ..) -> (Pubkey, u8)        
+                                                                                
+  #[derive(ShankInstruction)]                                                   
+                                                                                
+  Marks instruction enums with account metadata.                                
+                                                                                
+  Account Attributes:                                                           
+  #[account(                                                                    
+      index?,                              // Optional account index            
+      writable | write | writ | mut?,      // Mutable account                   
+      signer | sign | sig?,                // Requires signature                
+      optional_signer?,                    // Optional signer                   
+      optional | option | opt?,            // Optional account                  
+      name="account_name",                 // Required: account name            
+      desc?="optional description"         // Optional: description             
+  )]                                                                            
+                                                                                
+  Known Accounts (auto-provided in generated SDKs):                             
+  - token_program → TOKEN_PROGRAM_ID                                            
+  - ata_program → ASSOCIATED_TOKEN_PROGRAM_ID                                   
+  - system_program → SystemProgram.programId                                    
+  - rent → SYSVAR_RENT_PUBKEY                                                   
+                                                                                
+  Optional Account Strategies:                                                  
+  - Default: Uses program_id for unset optional accounts                        
+  - #[legacy_optional_accounts_strategy]: Omits unset optional accounts from    
+  array                                                                         
+                                                                                
+  Example:                                                                      
+  #[derive(ShankInstruction, BorshSerialize, BorshDeserialize)]                 
+  pub enum VaultInstruction {                                                   
+      #[account(0, writable, name="vault", desc="Vault account")]               
+      #[account(1, signer, name="authority", desc="Authority")]                 
+      #[account(2, name="token_program")]                                       
+      InitVault(InitVaultArgs),                                                 
+                                                                                
+      #[account(0, writable, name="vault")]                                     
+      #[account(1, optional, name="delegate")]                                  
+      UpdateVault,                                                              
+  }                                                                             
+                                                                                
+  #[derive(ShankType)]                                                          
+                                                                                
+  Marks custom types for IDL inclusion (no code generation).                    
+                                                                                
+  Type Attributes:                                                              
+  - #[pod_sentinel(255, 255, ...)] - Specifies sentinel value for PodOption<T>  
+  (fixed-size optionals)                                                        
+                                                                                
+  #[derive(ShankType)]                                                          
+  #[pod_sentinel(255, 255, 255, 255)]                                           
+  pub struct CustomU32 {                                                        
+      pub value: u32,                                                           
+  }                                                                             
+                                                                                
+  // Can now be used with PodOption                                             
+  pub struct MyAccount {                                                        
+      pub optional_field: PodOption<CustomU32>,                                 
+  }                                                                             
+                                                                                
+  #[derive(ShankBuilder)]                                                       
+                                                                                
+  Generates fluent builder structs for instructions.                            
+                                                                                
+  #[derive(ShankBuilder)]                                                       
+  pub enum Instruction {                                                        
+      #[account(0, writable, name="vault")]                                     
+      #[account(1, signer, name="authority")]                                   
+      #[args(additional_accounts: Vec<AccountMeta>)]                            
+      Create(CreateArgs)                                                        
+  }                                                                             
+                                                                                
+  // Generated builder:                                                         
+  let ix = CreateBuilder::new()                                                 
+      .vault(vault_pubkey)                                                      
+      .authority(authority_pubkey)                                              
+      .build(additional_accounts)                                               
+      .instruction();                                                           
+                                                                                
+  #[derive(ShankContext)]                                                       
+                                                                                
+  Generates account context structs for parsing &[AccountInfo] arrays.          
+                                                                                
+  #[derive(ShankContext)]                                                       
+  pub enum Instruction {                                                        
+      #[account(0, writable, name="vault")]                                     
+      #[account(1, signer, name="authority")]                                   
+      Create(CreateArgs)                                                        
+  }                                                                             
+                                                                                
+  // Generated context:                                                         
+  pub fn process_create<'a>(                                                    
+      accounts: &'a [AccountInfo<'a>],                                          
+  ) -> ProgramResult {                                                          
+      let context = CreateAccounts::context(accounts)?;                         
+                                                                                
+      // Access by name:                                                        
+      msg!("{}", context.accounts.vault.key);                                   
+      msg!("{}", context.accounts.authority.key);                               
+  }                                                                             
+                                                                                
+  ---                                                                           
+  2. Output IDL Format                                                          
+                                                                                
+  The generated IDL is JSON following Anchor's IDL format with Shank extensions:
+                                                                                
+  Top-Level Structure:                                                          
+  {                                                                             
+    "version": "0.1.0",                                                         
+    "name": "my_program",                                                       
+    "constants": [],                                                            
+    "instructions": [...],                                                      
+    "state": null,                                                              
+    "accounts": [...],                                                          
+    "types": [...],                                                             
+    "events": null,                                                             
+    "errors": [...],                                                            
+    "metadata": {                                                               
+      "origin": "shank",                                                        
+      "address": "ProgramID111111111111111111111111111111111"                   
+    }                                                                           
+  }                                                                             
+                                                                                
+  Instruction Format:                                                           
+  {                                                                             
+    "name": "CreateThing",                                                      
+    "accounts": [                                                               
+      {                                                                         
+        "name": "creator",                                                      
+        "isMut": false,                                                         
+        "isSigner": true                                                        
+      },                                                                        
+      {                                                                         
+        "name": "thing",                                                        
+        "isMut": true,                                                          
+        "isSigner": false                                                       
+      }                                                                         
+    ],                                                                          
+    "args": [                                                                   
+      {                                                                         
+        "name": "amount",                                                       
+        "type": "u64"                                                           
+      },                                                                        
+      {                                                                         
+        "name": "data",                                                         
+        "type": {                                                               
+          "defined": "CustomData"                                               
+        }                                                                       
+      }                                                                         
+    ],                                                                          
+    "discriminant": { "type": "u8", "value": 0 }                                
+  }                                                                             
+                                                                                
+  Account/Type Definition Format:                                               
+  {                                                                             
+    "name": "Metadata",                                                         
+    "type": {                                                                   
+      "kind": "struct",                                                         
+      "fields": [                                                               
+        {                                                                       
+          "name": "authority",                                                  
+          "type": "publicKey"                                                   
+        },                                                                      
+        {                                                                       
+          "name": "balance",                                                    
+          "type": "u64"                                                         
+        },                                                                      
+        {                                                                       
+          "name": "optionalData",                                               
+          "type": {                                                             
+            "option": "u8"                                                      
+          }                                                                     
+        },                                                                      
+        {                                                                       
+          "name": "customType",                                                 
+          "type": {                                                             
+            "defined": "MyCustomType"                                           
+          }                                                                     
+        }                                                                       
+      ]                                                                         
+    }                                                                           
+  }                                                                             
+                                                                                
+  Supported Types:                                                              
+  - Primitives: bool, u8, u16, u32, u64, u128, i8, i16, i32, i64, i128          
+  - Special: publicKey, string, bytes                                           
+  - Composites: { "array": [type, size] }, { "vec": type }, { "option": type }  
+  - Collections: { "hashMap": { "key": type, "value": type } }, { "hashSet":    
+  type }                                                                        
+  - Custom: { "defined": "TypeName" }                                           
+  - Fixed-size optional: { "fixedSizeOption": { "type": type, "sentinel": [255, 
+  ...] } }                                                                      
+                                                                                
+  Enum Format:                                                                  
+  {                                                                             
+    "name": "Status",                                                           
+    "type": {                                                                   
+      "kind": "enum",                                                           
+      "variants": [                                                             
+        { "name": "Active" },                                                   
+        { "name": "Inactive" },                                                 
+        {                                                                       
+          "name": "WithData",                                                   
+          "fields": [                                                           
+            { "name": "value", "type": "u64" }                                  
+          ]                                                                     
+        }                                                                       
+      ]                                                                         
+    }                                                                           
+  }                                                                             
+                                                                                
+  ---                                                                           
+  3. CLI Usage                                                                  
+                                                                                
+  Installation:                                                                 
+  cargo install shank-cli                                                       
+                                                                                
+  Basic Usage:                                                                  
+  # Extract IDL from current crate (outputs to ./idl/)                          
+  shank idl                                                                     
+                                                                                
+  # Specify custom output directory                                             
+  shank idl -o ./my-idl                                                         
+                                                                                
+  # Specify program crate root                                                  
+  shank idl -r ./my-program                                                     
+                                                                                
+  # Specify custom output filename                                              
+  shank idl --out-filename my_program.json                                      
+                                                                                
+  # Override program ID in metadata                                             
+  shank idl -p YourProgramID1111111111111111111111111111                        
+                                                                                
+  Full Options:                                                                 
+  shank idl [OPTIONS]                                                           
+                                                                                
+  OPTIONS:                                                                      
+      -h, --help                           Print help information               
+      -o, --out-dir <OUT_DIR>              Output directory for IDL JSON        
+  [default: idl]                                                                
+          --out-filename <OUT_FILENAME>    Custom output filename               
+      -r, --crate-root <CRATE_ROOT>        Directory of program crate [default: 
+  .]                                                                            
+      -p, --program-id <PROGRAM_ID>        Override program address in metadata 
+                                                                                
+  Workflow:                                                                     
+  1. Annotate your Rust program with Shank macros                               
+  2. Build your program: cargo build (macros expand)                            
+  3. Extract IDL: shank idl                                                     
+  4. Generated file: ./idl/your_program_name.json                               
+  5. Feed to https://github.com/metaplex-foundation/solita or                   
+  https://github.com/metaplex-foundation/kinobi to generate TypeScript SDK      
+                                                                                
+  The IDL file can then be used by code generators to create type-safe          
+  TypeScript clients for your Solana program!                                   
+                                                                                
+✻ Baked for 1m 13s                                                              
+
