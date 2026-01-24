@@ -1,14 +1,7 @@
 use std::path::{Path, PathBuf};
 
-use shank_idl::{
-    idl::{Idl, IdlInstruction},
-    idl_field::IdlField,
-    idl_type::IdlType,
-    idl_type_definition::IdlTypeDefinition,
-    idl_type_definition::IdlTypeDefinitionTy,
-    idl_variant::EnumFields,
-    parse_file, ParseIdlConfig,
-};
+use serde_json::{json, Value};
+use shank_idl::{idl::Idl, parse_file, ParseIdlConfig};
 
 fn fixtures_dir() -> PathBuf {
     let root_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -26,173 +19,130 @@ fn parse_case(case: &str) -> Idl {
         .expect("File contains IDL")
 }
 
-fn find_type<'a>(
-    types: &'a [IdlTypeDefinition],
-    name: &str,
-) -> &'a IdlTypeDefinition {
-    types
+fn as_value(idl: &Idl) -> Value {
+    serde_json::to_value(idl).expect("Should serialize IDL")
+}
+
+fn find_named<'a>(items: &'a [Value], name: &str) -> &'a Value {
+    items
         .iter()
-        .find(|def| def.name == name)
-        .unwrap_or_else(|| panic!("Missing type '{}'", name))
+        .find(|item| item["name"] == name)
+        .unwrap_or_else(|| panic!("Missing item '{}'", name))
 }
 
-fn find_instruction<'a>(
-    instructions: &'a [IdlInstruction],
-    name: &str,
-) -> &'a IdlInstruction {
-    instructions
-        .iter()
-        .find(|ix| ix.name == name)
-        .unwrap_or_else(|| panic!("Missing instruction '{}'", name))
+fn fields_for(def: &Value) -> &[Value] {
+    def["type"]["fields"]
+        .as_array()
+        .expect("Expected fields array")
 }
 
-fn find_struct_fields<'a>(
-    def: &'a IdlTypeDefinition,
-) -> &'a [IdlField] {
-    match &def.ty {
-        IdlTypeDefinitionTy::Struct { fields } => fields,
-        _ => panic!("Expected struct type definition for {}", def.name),
-    }
-}
-
-fn find_enum_variants<'a>(
-    def: &'a IdlTypeDefinition,
-) -> &'a [shank_idl::idl_variant::IdlEnumVariant] {
-    match &def.ty {
-        IdlTypeDefinitionTy::Enum { variants } => variants,
-        _ => panic!("Expected enum type definition for {}", def.name),
-    }
-}
-
-fn assert_field_type(fields: &[IdlField], name: &str, expected: &IdlType) {
+fn assert_field_type(fields: &[Value], name: &str, expected: Value) {
     let field = fields
         .iter()
-        .find(|field| field.name == name)
+        .find(|field| field["name"] == name)
         .unwrap_or_else(|| panic!("Missing field '{}'", name));
-    assert_eq!(&field.ty, expected);
+    assert_eq!(field["type"], expected);
 }
 
 #[test]
 fn import_case1_simple_proxy() {
     let idl = parse_case("case1");
+    let value = as_value(&idl);
+    let types = value["types"].as_array().expect("types array");
 
-    let proxy = find_type(&idl.types, "RemoteRouterConfigProxy");
-    let fields = find_struct_fields(proxy);
-    assert_field_type(fields, "domain", &IdlType::U32);
+    let proxy = find_named(types, "RemoteRouterConfigProxy");
+    let fields = fields_for(proxy);
+    assert_field_type(fields, "domain", json!("u32"));
     assert_field_type(
         fields,
         "router",
-        &IdlType::Option(Box::new(IdlType::Array(
-            Box::new(IdlType::U8),
-            32,
-        ))),
+        json!({"option": {"array": ["u8", 32]}}),
     );
 
-    let local = find_type(&idl.types, "LocalConfig");
-    let local_fields = find_struct_fields(local);
+    let local = find_named(types, "LocalConfig");
+    let local_fields = fields_for(local);
     assert_field_type(
         local_fields,
         "remote",
-        &IdlType::Defined("RemoteRouterConfigProxy".to_string()),
+        json!({"defined": "RemoteRouterConfigProxy"}),
     );
 }
 
 #[test]
 fn import_case2_account_proxy() {
     let idl = parse_case("case2");
+    let value = as_value(&idl);
+    let types = value["types"].as_array().expect("types array");
+    let accounts = value["accounts"].as_array().expect("accounts array");
 
-    let proxy = find_type(&idl.types, "MerkleTreeProxy");
-    let fields = find_struct_fields(proxy);
+    let proxy = find_named(types, "MerkleTreeProxy");
+    let fields = fields_for(proxy);
     assert_field_type(
         fields,
         "branch",
-        &IdlType::Array(
-            Box::new(IdlType::Array(Box::new(IdlType::U8), 32)),
-            32,
-        ),
+        json!({"array": [{"array": ["u8", 32]}, 32]}),
     );
-    assert_field_type(fields, "count", &IdlType::U64);
+    assert_field_type(fields, "count", json!("u64"));
 
-    let outbox = find_type(&idl.accounts, "Outbox");
-    let outbox_fields = find_struct_fields(outbox);
+    let outbox = find_named(accounts, "Outbox");
+    let outbox_fields = fields_for(outbox);
     assert_field_type(
         outbox_fields,
         "tree",
-        &IdlType::Defined("MerkleTreeProxy".to_string()),
+        json!({"defined": "MerkleTreeProxy"}),
     );
 }
 
 #[test]
 fn import_case3_instruction_proxy() {
     let idl = parse_case("case3");
+    let value = as_value(&idl);
+    let types = value["types"].as_array().expect("types array");
+    let instructions = value["instructions"]
+        .as_array()
+        .expect("instructions array");
 
-    let init_proxy = find_type(&idl.types, "InitProxy");
-    let init_fields = find_struct_fields(init_proxy);
-    assert_field_type(
-        init_fields,
-        "mailbox",
-        &IdlType::Array(Box::new(IdlType::U8), 32),
-    );
-    assert_field_type(init_fields, "decimals", &IdlType::U8);
+    let init_proxy = find_named(types, "InitProxy");
+    let init_fields = fields_for(init_proxy);
+    assert_field_type(init_fields, "mailbox", json!({"array": ["u8", 32]}));
+    assert_field_type(init_fields, "decimals", json!("u8"));
 
-    let transfer_proxy = find_type(&idl.types, "TransferRemoteProxy");
-    let transfer_fields = find_struct_fields(transfer_proxy);
-    assert_field_type(transfer_fields, "destination_domain", &IdlType::U32);
+    let transfer_proxy = find_named(types, "TransferRemoteProxy");
+    let transfer_fields = fields_for(transfer_proxy);
+    assert_field_type(transfer_fields, "destination_domain", json!("u32"));
     assert_field_type(
         transfer_fields,
         "recipient",
-        &IdlType::Array(Box::new(IdlType::U8), 32),
+        json!({"array": ["u8", 32]}),
     );
 
-    let instruction_proxy = find_type(&idl.types, "TokenInstructionProxy");
-    let variants = find_enum_variants(instruction_proxy);
-    let init_variant = variants
-        .iter()
-        .find(|variant| variant.name == "Init")
-        .expect("Missing Init variant on TokenInstructionProxy");
-    let transfer_variant = variants
-        .iter()
-        .find(|variant| variant.name == "TransferRemote")
-        .expect("Missing TransferRemote variant on TokenInstructionProxy");
-
-    match &init_variant.fields {
-        Some(EnumFields::Tuple(types)) => {
-            assert_eq!(
-                types,
-                &vec![IdlType::Defined("InitProxy".to_string())]
-            );
-        }
-        _ => panic!("Expected tuple fields for Init variant"),
-    }
-
-    match &transfer_variant.fields {
-        Some(EnumFields::Tuple(types)) => {
-            assert_eq!(
-                types,
-                &vec![IdlType::Defined("TransferRemoteProxy".to_string())]
-            );
-        }
-        _ => panic!("Expected tuple fields for TransferRemote variant"),
-    }
-
-    let init_ix = find_instruction(&idl.instructions, "Init");
-    assert_eq!(init_ix.args.len(), 1);
+    let instruction_proxy = find_named(types, "TokenInstructionProxy");
+    let variants = instruction_proxy["type"]["variants"]
+        .as_array()
+        .expect("variants array");
+    let init_variant = find_named(variants, "Init");
+    let transfer_variant = find_named(variants, "TransferRemote");
     assert_eq!(
-        init_ix.args[0].ty,
-        IdlType::Defined("InitProxy".to_string())
+        init_variant["fields"],
+        json!([{"defined": "InitProxy"}])
+    );
+    assert_eq!(
+        transfer_variant["fields"],
+        json!([{"defined": "TransferRemoteProxy"}])
     );
 
-    let transfer_ix = find_instruction(&idl.instructions, "TransferRemote");
-    assert_eq!(transfer_ix.args.len(), 1);
+    let init_ix = find_named(instructions, "Init");
+    assert_eq!(init_ix["args"][0]["type"], json!({"defined": "InitProxy"}));
+
+    let transfer_ix = find_named(instructions, "TransferRemote");
     assert_eq!(
-        transfer_ix.args[0].ty,
-        IdlType::Defined("TransferRemoteProxy".to_string())
+        transfer_ix["args"][0]["type"],
+        json!({"defined": "TransferRemoteProxy"})
     );
 
-    let base_ix = find_instruction(&idl.instructions, "Base");
-    assert_eq!(base_ix.args.len(), 1);
+    let base_ix = find_named(instructions, "Base");
     assert_eq!(
-        base_ix.args[0].ty,
-        IdlType::Defined("TokenInstructionProxy".to_string())
+        base_ix["args"][0]["type"],
+        json!({"defined": "TokenInstructionProxy"})
     );
 }
