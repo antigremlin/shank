@@ -340,24 +340,11 @@ pub fn resolve_rust_ty(
             (ident, kind)
         }
         Type::Array(TypeArray { elem, len, .. }) => {
-            let (inner_ident, inner_kind) = match elem.deref() {
-                Type::Path(TypePath { path, .. }) => {
-                    ident_and_kind_from_path(path)
-                }
-                _ => {
-                    return Err(ParseError::new(
-                        ty.span(),
-                        "Only owned or reference Path/Array types supported",
-                    ));
-                }
-            };
+            let inner_ty = resolve_rust_ty(
+                elem.deref(),
+                RustTypeContext::CollectionItem,
+            )?;
             let len = len_from_expr(len)?;
-            let inner_ty = RustType {
-                kind: inner_kind,
-                ident: inner_ident,
-                reference: ParsedReference::Owned,
-                context: RustTypeContext::CollectionItem,
-            };
             let kind =
                 TypeKind::Composite(Composite::Array(len), vec![inner_ty]);
             (format_ident!("Array"), kind)

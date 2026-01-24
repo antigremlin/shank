@@ -109,7 +109,7 @@ fn import_case3_instruction_proxy() {
 
     let transfer_proxy = find_named(types, "TransferRemoteProxy");
     let transfer_fields = fields_for(transfer_proxy);
-    assert_field_type(transfer_fields, "destination_domain", json!("u32"));
+    assert_field_type(transfer_fields, "destinationDomain", json!("u32"));
     assert_field_type(
         transfer_fields,
         "recipient",
