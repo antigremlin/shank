@@ -13,18 +13,21 @@ use crate::{
     idl_metadata::IdlMetadata,
     idl_type::IdlType,
     idl_type_definition::IdlTypeDefinition,
-    manifest::Manifest,
+    manifest::{Manifest, WithPath},
 };
 use shank_macro_impl::{
     account::extract_account_structs,
     converters::parse_error_into,
     custom_type::{CustomEnum, CustomStruct, DetectCustomTypeConfig},
     error::extract_this_errors,
-    instruction::extract_instruction_enums,
+    instruction::{extract_instruction_enums, Instruction},
     krate::CrateContext,
     macros::ProgramId,
-    parsed_struct::StructAttr,
+    parsed_enum::ParsedEnum,
+    parsed_struct::{ParsedStruct, StructAttr},
+    parsers::get_derive_attr,
     shank_import::ShankImport,
+    DERIVE_INSTRUCTION_ATTR,
 };
 
 // -----------------
@@ -60,6 +63,14 @@ impl ParseIdlConfig {
     }
 }
 
+type ImportCache = HashMap<PathBuf, Idl>;
+type TypeImportMap = HashMap<String, HashMap<String, String>>;
+
+struct ImportContext {
+    root: PathBuf,
+    manifest: Option<WithPath<Manifest>>,
+}
+
 // -----------------
 // Parse File
 // -----------------
@@ -71,13 +82,20 @@ pub fn parse_file(
 ) -> Result<Option<Idl>> {
     let filename = filename.as_ref();
     let ctx = CrateContext::parse(filename)?;
-    let import_root = resolve_import_root(filename)?;
+    let import_ctx = resolve_import_context(filename)?;
+    let mut import_cache: ImportCache = HashMap::new();
 
     let constants = constants(&ctx)?;
-    let instructions = instructions(&ctx)?;
     let state = state(&ctx)?;
     let accounts = accounts(&ctx)?;
-    let types = types(&ctx, &config.detect_custom_struct, &import_root)?;
+    let (types, type_imports) =
+        types(&ctx, &config.detect_custom_struct, &import_ctx, &mut import_cache)?;
+    let instructions = instructions(
+        &ctx,
+        &import_ctx,
+        &type_imports,
+        &mut import_cache,
+    )?;
     let events = events(&ctx)?;
     let errors = errors(&ctx)?;
     let metadata = metadata(
@@ -119,18 +137,55 @@ fn accounts(ctx: &CrateContext) -> Result<Vec<IdlTypeDefinition>> {
     Ok(accounts)
 }
 
-fn instructions(ctx: &CrateContext) -> Result<Vec<IdlInstruction>> {
-    let instruction_enums =
-        extract_instruction_enums(ctx.enums()).map_err(parse_error_into)?;
-
+fn instructions(
+    ctx: &CrateContext,
+    import_ctx: &ImportContext,
+    type_imports: &TypeImportMap,
+    cache: &mut ImportCache,
+) -> Result<Vec<IdlInstruction>> {
     let mut instructions: Vec<IdlInstruction> = Vec::new();
+    let mut seen = HashSet::new();
+    let mut local_enums = Vec::new();
+
+    for item_enum in ctx.enums() {
+        if get_derive_attr(&item_enum.attrs, DERIVE_INSTRUCTION_ATTR).is_none() {
+            continue;
+        }
+
+        let import =
+            ShankImport::from_attrs(&item_enum.attrs).map_err(parse_error_into)?;
+        if let Some(import) = import {
+            let renames = type_imports.get(&import.import_from);
+            let imported = resolve_imported_instructions(
+                import_ctx,
+                &import,
+                &item_enum.ident.to_string(),
+                renames,
+                cache,
+            )?;
+            for ix in imported {
+                if !seen.insert(ix.name.clone()) {
+                    bail!("Duplicate instruction '{}'", ix.name);
+                }
+                instructions.push(ix);
+            }
+        } else {
+            local_enums.push(item_enum);
+        }
+    }
+
+    let instruction_enums =
+        extract_instruction_enums(local_enums.into_iter()).map_err(parse_error_into)?;
+
     // TODO(thlorenz): Should we enforce only one Instruction Enum Arg?
     // TODO(thlorenz): Should unfold that only arg?
     // TODO(thlorenz): Better way to combine those if we don't do the above.
-
     for ix in instruction_enums {
         let idl_instructions: IdlInstructions = ix.try_into()?;
         for ix in idl_instructions.0 {
+            if !seen.insert(ix.name.clone()) {
+                bail!("Duplicate instruction '{}'", ix.name);
+            }
             instructions.push(ix);
         }
     }
@@ -151,8 +206,9 @@ fn state(_ctx: &CrateContext) -> Result<Option<IdlState>> {
 fn types(
     ctx: &CrateContext,
     detect_custom_type: &DetectCustomTypeConfig,
-    import_root: &Path,
-) -> Result<Vec<IdlTypeDefinition>> {
+    import_ctx: &ImportContext,
+    cache: &mut ImportCache,
+) -> Result<(Vec<IdlTypeDefinition>, TypeImportMap)> {
     let custom_structs = ctx
         .structs()
         .filter(|x| detect_custom_type.are_custom_type_attrs(&x.attrs))
@@ -165,18 +221,20 @@ fn types(
         .map(|x| CustomEnum::try_from(x).map_err(parse_error_into))
         .collect::<Result<Vec<CustomEnum>>>()?;
 
-    let mut import_cache: HashMap<PathBuf, Idl> = HashMap::new();
     let mut seen = HashSet::new();
     let mut types = Vec::new();
+    let mut type_imports: TypeImportMap = HashMap::new();
 
     for strct in custom_structs {
         let name = strct.ident.to_string();
         let type_def = if let Some(import) = &strct.import {
+            register_type_import(&mut type_imports, import, &name);
             let mut imported = resolve_imported_definition(
-                import_root,
+                import_ctx,
                 import,
                 &name,
-                &mut import_cache,
+                type_imports.get(&import.import_from),
+                cache,
             )?;
             apply_pod_sentinel_override(&mut imported, &strct)?;
             imported
@@ -193,11 +251,13 @@ fn types(
     for enm in custom_enums {
         let name = enm.ident.to_string();
         let type_def = if let Some(import) = &enm.import {
+            register_type_import(&mut type_imports, import, &name);
             resolve_imported_definition(
-                import_root,
+                import_ctx,
                 import,
                 &name,
-                &mut import_cache,
+                type_imports.get(&import.import_from),
+                cache,
             )?
         } else {
             IdlTypeDefinition::try_from(enm)?
@@ -209,63 +269,223 @@ fn types(
         types.push(type_def);
     }
 
-    Ok(types)
+    for item_enum in ctx.enums() {
+        if get_derive_attr(&item_enum.attrs, DERIVE_INSTRUCTION_ATTR).is_none() {
+            continue;
+        }
+        let import =
+            ShankImport::from_attrs(&item_enum.attrs).map_err(parse_error_into)?;
+        let import = match import {
+            Some(import) => import,
+            None => continue,
+        };
+        let name = item_enum.ident.to_string();
+        register_type_import(&mut type_imports, &import, &name);
+        let type_def = resolve_imported_definition(
+            import_ctx,
+            &import,
+            &name,
+            type_imports.get(&import.import_from),
+            cache,
+        )?;
+        if !seen.insert(type_def.name.clone()) {
+            bail!("Duplicate type definition '{}'", type_def.name);
+        }
+        types.push(type_def);
+    }
+
+    Ok((types, type_imports))
 }
 
-fn resolve_import_root(filename: &Path) -> Result<PathBuf> {
+fn register_type_import(
+    imports: &mut TypeImportMap,
+    import: &ShankImport,
+    local_name: &str,
+) {
+    let external_name = import.rename.as_deref().unwrap_or(local_name);
+    imports
+        .entry(import.import_from.clone())
+        .or_default()
+        .insert(external_name.to_string(), local_name.to_string());
+}
+
+fn resolve_import_context(filename: &Path) -> Result<ImportContext> {
     let start = filename
         .parent()
         .unwrap_or_else(|| Path::new("."))
         .to_path_buf();
-    if let Some(manifest) = Manifest::discover_from_path(start.clone())? {
-        if let Some(root) = manifest.path().parent() {
-            return Ok(root.to_path_buf());
-        }
-    }
-    Ok(start)
+    let manifest = Manifest::discover_from_path(start.clone())?;
+    let root = manifest
+        .as_ref()
+        .and_then(|m| m.path().parent().map(Path::to_path_buf))
+        .unwrap_or(start);
+    Ok(ImportContext { root, manifest })
 }
 
 fn resolve_imported_definition(
-    import_root: &Path,
+    import_ctx: &ImportContext,
     import: &ShankImport,
     local_name: &str,
-    cache: &mut HashMap<PathBuf, Idl>,
+    type_renames: Option<&HashMap<String, String>>,
+    cache: &mut ImportCache,
 ) -> Result<IdlTypeDefinition> {
-    let path = resolve_import_path(import_root, &import.import_from);
-    let idl = load_import_idl(&path, cache)?;
     let external_name = import.rename.as_deref().unwrap_or(local_name);
-    let mut def = find_imported_definition(&idl, external_name)
-        .cloned()
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "Type '{}' not found in imported IDL {}",
-                external_name,
-                path.display()
-            )
-        })?;
+    let source = resolve_import_source(import_ctx, &import.import_from)?;
+    let mut def = match source {
+        ImportSource::IdlPath(path) => {
+            let idl = load_import_idl(&path, cache)?;
+            find_imported_definition(&idl, external_name)
+                .cloned()
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Type '{}' not found in imported IDL {}",
+                        external_name,
+                        path.display()
+                    )
+                })?
+        }
+        ImportSource::CrateRoot(root) => {
+            let idl_path = crate_idl_path(&root)?;
+            let idl = if idl_path.exists() {
+                Some(load_import_idl(&idl_path, cache)?)
+            } else {
+                None
+            };
+            if let Some(idl) = idl {
+                if let Some(def) = find_imported_definition(&idl, external_name) {
+                    def.clone()
+                } else {
+                    find_type_definition_in_crate(&root, external_name)?
+                        .ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "Type '{}' not found in imported crate {}",
+                                external_name,
+                                root.display()
+                            )
+                        })?
+                }
+            } else {
+                find_type_definition_in_crate(&root, external_name)?
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "Type '{}' not found in imported crate {}",
+                            external_name,
+                            root.display()
+                        )
+                    })?
+            }
+        }
+    };
+    if let Some(renames) = type_renames {
+        rewrite_type_definition(&mut def, renames);
+    }
     def.name = local_name.to_string();
     Ok(def)
 }
 
-fn resolve_import_path(import_root: &Path, import_from: &str) -> PathBuf {
+fn resolve_imported_instructions(
+    import_ctx: &ImportContext,
+    import: &ShankImport,
+    local_name: &str,
+    type_renames: Option<&HashMap<String, String>>,
+    cache: &mut ImportCache,
+) -> Result<Vec<IdlInstruction>> {
+    let external_name = import.rename.as_deref().unwrap_or(local_name);
+    let source = resolve_import_source(import_ctx, &import.import_from)?;
+    let mut instructions = match source {
+        ImportSource::IdlPath(path) => {
+            let idl = load_import_idl(&path, cache)?;
+            idl.instructions
+        }
+        ImportSource::CrateRoot(root) => {
+            let idl_path = crate_idl_path(&root)?;
+            if idl_path.exists() {
+                let idl = load_import_idl(&idl_path, cache)?;
+                if !idl.instructions.is_empty() {
+                    idl.instructions
+                } else {
+                    find_instructions_in_crate(
+                        &root,
+                        external_name,
+                    )?
+                }
+            } else {
+                find_instructions_in_crate(&root, external_name)?
+            }
+        }
+    };
+
+    if let Some(renames) = type_renames {
+        for ix in &mut instructions {
+            for arg in &mut ix.args {
+                rewrite_idl_type(&mut arg.ty, renames);
+            }
+        }
+    }
+
+    Ok(instructions)
+}
+
+enum ImportSource {
+    IdlPath(PathBuf),
+    CrateRoot(PathBuf),
+}
+
+fn resolve_import_source(
+    import_ctx: &ImportContext,
+    import_from: &str,
+) -> Result<ImportSource> {
     let looks_like_path = import_from.contains('/')
         || import_from.contains('\\')
         || import_from.ends_with(".json");
     if looks_like_path {
         let path = Path::new(import_from);
-        if path.is_absolute() {
+        let path = if path.is_absolute() {
             path.to_path_buf()
         } else {
-            import_root.join(path)
-        }
-    } else {
-        import_root.join("idl").join(format!("{}.json", import_from))
+            import_ctx.root.join(path)
+        };
+        return Ok(ImportSource::IdlPath(path));
     }
+
+    if let Some(root) = resolve_dependency_root(import_ctx, import_from) {
+        return Ok(ImportSource::CrateRoot(root));
+    }
+
+    Ok(ImportSource::IdlPath(
+        import_ctx.root.join("idl").join(format!("{}.json", import_from)),
+    ))
+}
+
+fn resolve_dependency_root(
+    import_ctx: &ImportContext,
+    import_from: &str,
+) -> Option<PathBuf> {
+    let manifest = import_ctx.manifest.as_ref()?;
+    let dep_path = manifest.dependency_path(import_from)?;
+    let manifest_dir = manifest.path().parent()?;
+    Some(manifest_dir.join(dep_path))
+}
+
+fn crate_idl_path(crate_root: &Path) -> Result<PathBuf> {
+    let manifest_path = crate_root.join("Cargo.toml");
+    let manifest = Manifest::from_path(&manifest_path)?;
+    let lib_name = manifest.lib_name()?;
+    Ok(crate_root.join("idl").join(format!("{}.json", lib_name)))
+}
+
+fn resolve_lib_path(crate_root: &Path) -> Result<PathBuf> {
+    let manifest_path = crate_root.join("Cargo.toml");
+    let manifest = Manifest::from_path(&manifest_path)?;
+    let rel_path = manifest
+        .lib_rel_path()
+        .unwrap_or_else(|| "src/lib.rs".to_string());
+    Ok(crate_root.join(rel_path))
 }
 
 fn load_import_idl(
     path: &Path,
-    cache: &mut HashMap<PathBuf, Idl>,
+    cache: &mut ImportCache,
 ) -> Result<Idl> {
     if let Some(idl) = cache.get(path) {
         return Ok(idl.clone());
@@ -288,6 +508,111 @@ fn find_imported_definition<'a>(
         .iter()
         .find(|def| def.name == name)
         .or_else(|| idl.accounts.iter().find(|def| def.name == name))
+}
+
+fn find_type_definition_in_crate(
+    crate_root: &Path,
+    name: &str,
+) -> Result<Option<IdlTypeDefinition>> {
+    let lib_path = resolve_lib_path(crate_root)?;
+    let ctx = CrateContext::parse(lib_path)?;
+
+    if let Some(item) = ctx.structs().find(|s| s.ident == name) {
+        let parsed = ParsedStruct::try_from(item).map_err(parse_error_into)?;
+        return Ok(Some(IdlTypeDefinition::try_from(parsed)?));
+    }
+
+    if let Some(item) = ctx.enums().find(|e| e.ident == name) {
+        let parsed = ParsedEnum::try_from(item).map_err(parse_error_into)?;
+        return Ok(Some(IdlTypeDefinition::try_from(parsed)?));
+    }
+
+    Ok(None)
+}
+
+fn find_instructions_in_crate(
+    crate_root: &Path,
+    enum_name: &str,
+) -> Result<Vec<IdlInstruction>> {
+    let lib_path = resolve_lib_path(crate_root)?;
+    let ctx = CrateContext::parse(lib_path)?;
+    let item = ctx
+        .enums()
+        .find(|e| e.ident == enum_name)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "Instruction enum '{}' not found in {}",
+                enum_name,
+                crate_root.display()
+            )
+        })?;
+    let parsed = ParsedEnum::try_from(item).map_err(parse_error_into)?;
+    let instruction = Instruction::try_from(&parsed).map_err(parse_error_into)?;
+    let idl_instructions: IdlInstructions = instruction.try_into()?;
+    Ok(idl_instructions.0)
+}
+
+fn rewrite_idl_type(
+    ty: &mut IdlType,
+    renames: &HashMap<String, String>,
+) {
+    match ty {
+        IdlType::Defined(name) => {
+            if let Some(new_name) = renames.get(name) {
+                *name = new_name.clone();
+            }
+        }
+        IdlType::Vec(inner)
+        | IdlType::Option(inner)
+        | IdlType::HashSet(inner)
+        | IdlType::BTreeSet(inner) => rewrite_idl_type(inner, renames),
+        IdlType::Array(inner, _) => rewrite_idl_type(inner, renames),
+        IdlType::HashMap(key, val)
+        | IdlType::BTreeMap(key, val) => {
+            rewrite_idl_type(key, renames);
+            rewrite_idl_type(val, renames);
+        }
+        IdlType::Tuple(types) => {
+            for t in types {
+                rewrite_idl_type(t, renames);
+            }
+        }
+        IdlType::FixedSizeOption { inner, .. } => {
+            rewrite_idl_type(inner, renames);
+        }
+        _ => {}
+    }
+}
+
+fn rewrite_type_definition(
+    type_def: &mut IdlTypeDefinition,
+    renames: &HashMap<String, String>,
+) {
+    match &mut type_def.ty {
+        crate::idl_type_definition::IdlTypeDefinitionTy::Struct { fields } => {
+            for field in fields {
+                rewrite_idl_type(&mut field.ty, renames);
+            }
+        }
+        crate::idl_type_definition::IdlTypeDefinitionTy::Enum { variants } => {
+            for variant in variants {
+                if let Some(fields) = &mut variant.fields {
+                    match fields {
+                        crate::idl_variant::EnumFields::Named(named_fields) => {
+                            for field in named_fields {
+                                rewrite_idl_type(&mut field.ty, renames);
+                            }
+                        }
+                        crate::idl_variant::EnumFields::Tuple(tuple_types) => {
+                            for ty in tuple_types {
+                                rewrite_idl_type(ty, renames);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 fn apply_pod_sentinel_override(

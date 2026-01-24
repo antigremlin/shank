@@ -6,7 +6,7 @@ use shank_macro_impl::parsed_enum::{
 };
 
 use crate::{idl_field::IdlField, idl_type::IdlType};
-use anyhow::{Error, Result};
+use anyhow::{bail, Error, Result};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(untagged)]
@@ -35,16 +35,38 @@ impl TryFrom<ParsedEnumVariant> for IdlEnumVariant {
     fn try_from(variant: ParsedEnumVariant) -> Result<Self> {
         let mut named_fields = Vec::new();
         let mut tuple_fields = Vec::new();
+        let override_ty = variant
+            .idl_type_override()
+            .map_err(Into::<Error>::into)?
+            .map(IdlType::try_from)
+            .transpose()?;
 
-        for field in &variant.fields {
-            let ty = IdlType::try_from(field.rust_type.clone())?;
+        if let Some(override_ty) = override_ty {
+            if variant.fields.len() != 1 {
+                bail!("idl_type override only supported on single-field variants");
+            }
+            let field = &variant.fields[0];
             match &field.ident {
-                Some(name) => named_fields.push(IdlField {
-                    name: name.to_string(),
-                    ty,
-                    attrs: None,
-                }),
-                None => tuple_fields.push(ty),
+                Some(name) => {
+                    named_fields.push(IdlField {
+                        name: name.to_string(),
+                        ty: override_ty,
+                        attrs: None,
+                    });
+                }
+                None => tuple_fields.push(override_ty),
+            }
+        } else {
+            for field in &variant.fields {
+                let ty = IdlType::try_from(field.rust_type.clone())?;
+                match &field.ident {
+                    Some(name) => named_fields.push(IdlField {
+                        name: name.to_string(),
+                        ty,
+                        attrs: None,
+                    }),
+                    None => tuple_fields.push(ty),
+                }
             }
         }
 

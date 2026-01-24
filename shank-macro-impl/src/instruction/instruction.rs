@@ -106,6 +106,7 @@ impl TryFrom<&ParsedEnumVariant> for InstructionVariant {
             ..
         } = variant;
 
+        let idl_type_override = variant.idl_type_override()?;
         let mut field_tys: InstructionVariantFields = if !fields.is_empty() {
             // Determine if the InstructionType is tuple or struct variant
             let field = fields.first().unwrap();
@@ -128,6 +129,29 @@ impl TryFrom<&ParsedEnumVariant> for InstructionVariant {
         } else {
             InstructionVariantFields::Unnamed(vec![])
         };
+
+        if let Some(override_ty) = idl_type_override {
+            match &mut field_tys {
+                InstructionVariantFields::Unnamed(fields) => {
+                    if fields.len() != 1 {
+                        return Err(ParseError::new_spanned(
+                            ident,
+                            "idl_type override only supported on single-field tuple variants",
+                        ));
+                    }
+                    *fields = vec![override_ty];
+                }
+                InstructionVariantFields::Named(fields) => {
+                    if fields.len() != 1 {
+                        return Err(ParseError::new_spanned(
+                            ident,
+                            "idl_type override only supported on single-field named variants",
+                        ));
+                    }
+                    fields[0].1 = override_ty;
+                }
+            }
+        }
 
         let attrs: &[Attribute] = attrs.as_ref();
         let (accounts, strategies) = match IdlInstruction::try_from(attrs) {
