@@ -10,6 +10,7 @@ pub use parsed_struct::*;
 pub use seed::*;
 pub use struct_attr::*;
 pub use struct_field_attr::StructFieldAttr;
+pub use struct_field_attr::StructFieldAttrs;
 
 #[cfg(test)]
 mod parsed_struct_test;
