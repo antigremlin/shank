@@ -524,7 +524,13 @@ fn find_type_definition_in_crate(
 
     if let Some(item) = ctx.enums().find(|e| e.ident == name) {
         let parsed = ParsedEnum::try_from(item).map_err(parse_error_into)?;
-        return Ok(Some(IdlTypeDefinition::try_from(parsed)?));
+        let name = parsed.ident.to_string();
+        let ty = parsed.try_into()?;
+        return Ok(Some(IdlTypeDefinition {
+            name,
+            ty,
+            pod_sentinel: None,
+        }));
     }
 
     Ok(None)
