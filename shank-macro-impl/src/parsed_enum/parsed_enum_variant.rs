@@ -6,7 +6,7 @@ use syn::{
 };
 
 use crate::{
-    parsed_struct::{StructFieldAttr, StructFieldAttrs},
+    parsed_struct::{struct_field_attr::StructFieldAttrs, StructFieldAttr},
     types::RustType,
 };
 
