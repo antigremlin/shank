@@ -76,7 +76,10 @@ impl TryFrom<&Field> for StructField {
         let rust_type: RustType = match (&f.ty).try_into() {
             Ok(ty) => ty,
             Err(err) => {
-                return Err(ParseError::new_spanned(ident, err.to_string()))
+                return Err(ParseError::new_spanned(
+                    ident,
+                    format!("Failed to parse type for field '{}': {}", ident, err),
+                ))
             }
         };
 

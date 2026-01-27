@@ -639,27 +639,33 @@ fn find_type_definition_in_crate(
     let lib_path = resolve_lib_path(crate_root)?;
     let ctx = CrateContext::parse(lib_path.clone())?;
 
-    if let Some(item) = ctx.structs().find(|s| s.ident == name) {
-        let parsed = ParsedStruct::try_from(item)
+    for (file, item) in structs_with_paths(&ctx) {
+        if item.ident != name {
+            continue;
+        }
+        let parsed = ParsedStruct::try_from(&item)
             .map_err(parse_error_into)
             .with_context(|| {
                 format!(
                     "While parsing struct '{}' in {}",
                     name,
-                    lib_path.display()
+                    file.display()
                 )
             })?;
         return Ok(Some(IdlTypeDefinition::try_from(parsed)?));
     }
 
-    if let Some(item) = ctx.enums().find(|e| e.ident == name) {
-        let parsed = ParsedEnum::try_from(item)
+    for (file, item) in enums_with_paths(&ctx) {
+        if item.ident != name {
+            continue;
+        }
+        let parsed = ParsedEnum::try_from(&item)
             .map_err(parse_error_into)
             .with_context(|| {
                 format!(
                     "While parsing enum '{}' in {}",
                     name,
-                    lib_path.display()
+                    file.display()
                 )
             })?;
         let name = parsed.ident.to_string();

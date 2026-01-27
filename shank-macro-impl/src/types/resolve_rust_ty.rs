@@ -1,7 +1,7 @@
 use std::hash::{Hash, Hasher};
 use std::{convert::TryFrom, ops::Deref};
 
-use quote::format_ident;
+use quote::{format_ident, ToTokens};
 use syn::{
     spanned::Spanned, AngleBracketedGenericArguments, Expr, ExprLit,
     GenericArgument, Ident, Lit, Path, PathArguments, PathSegment, Type,
@@ -308,7 +308,10 @@ fn len_from_expr(expr: &Expr) -> ParseResult<usize> {
         }
         _ => Err(ParseError::new(
             expr.span(),
-            "Expected a Lit(ExprLit(Int)) expression when extracting length",
+            format!(
+                "Expected integer literal for array length, found '{}'",
+                expr.to_token_stream()
+            ),
         )),
     }
 }
