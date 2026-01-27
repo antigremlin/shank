@@ -1,4 +1,7 @@
-use std::path::{Path, PathBuf};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 use serde_json::{json, Value};
 use shank_idl::{idl::Idl, parse_file, ParseIdlConfig};
@@ -14,9 +17,22 @@ fn parse_case(case: &str) -> Idl {
         .join("importing-program")
         .join("src")
         .join("lib.rs");
-    parse_file(file, &ParseIdlConfig::optional_program_address())
+    let idl = parse_file(file, &ParseIdlConfig::optional_program_address())
         .expect("Parsing should not fail")
-        .expect("File contains IDL")
+        .expect("File contains IDL");
+    write_idl(case, &idl);
+    idl
+}
+
+fn write_idl(case: &str, idl: &Idl) {
+    let crate_root = fixtures_dir().join(case).join("importing-program");
+    let idl_dir = crate_root.join("idl");
+    fs::create_dir_all(&idl_dir)
+        .expect("Should create idl output directory");
+    let output_path = idl_dir.join("importing-program.json");
+    let json = serde_json::to_string_pretty(idl)
+        .expect("Should serialize IDL");
+    fs::write(&output_path, json).expect("Should write IDL json");
 }
 
 fn as_value(idl: &Idl) -> Value {
