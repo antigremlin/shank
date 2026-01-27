@@ -629,7 +629,7 @@ fn find_type_definition_in_crate(
     name: &str,
 ) -> Result<Option<IdlTypeDefinition>> {
     let lib_path = resolve_lib_path(crate_root)?;
-    let ctx = CrateContext::parse(lib_path)?;
+    let ctx = CrateContext::parse(lib_path.clone())?;
 
     if let Some(item) = ctx.structs().find(|s| s.ident == name) {
         let parsed = ParsedStruct::try_from(item)
@@ -671,7 +671,7 @@ fn find_instructions_in_crate(
     enum_name: &str,
 ) -> Result<Vec<IdlInstruction>> {
     let lib_path = resolve_lib_path(crate_root)?;
-    let ctx = CrateContext::parse(lib_path)?;
+    let ctx = CrateContext::parse(lib_path.clone())?;
     let item = ctx
         .enums()
         .find(|e| e.ident == enum_name)
