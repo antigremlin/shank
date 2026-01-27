@@ -126,7 +126,10 @@ impl TryFrom<&ItemStruct> for ParsedStruct {
             _ => {
                 return Err(ParseError::new_spanned(
                     &item.fields,
-                    "failed to parse fields make sure they are all named",
+                    format!(
+                        "failed to parse fields for struct '{}': only named fields are supported",
+                        item.ident
+                    ),
                 ))
             }
         };
