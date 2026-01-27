@@ -1,3 +1,5 @@
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::{convert::TryFrom, ops::Deref};
 
@@ -10,6 +12,32 @@ use syn::{
 
 use super::{Composite, ParsedReference, Primitive, TypeKind, Value};
 use syn::{Error as ParseError, Result as ParseResult};
+
+thread_local! {
+    static CONST_LENGTHS: RefCell<HashMap<String, usize>> = RefCell::new(HashMap::new());
+}
+
+pub fn with_const_lengths<F, R>(lengths: HashMap<String, usize>, f: F) -> R
+where
+    F: FnOnce() -> R,
+{
+    CONST_LENGTHS.with(|cell| {
+        let mut map = cell.borrow_mut();
+        let previous = std::mem::take(&mut *map);
+        *map = lengths;
+        drop(map);
+
+        let result = f();
+
+        let mut map = cell.borrow_mut();
+        *map = previous;
+        result
+    })
+}
+
+fn resolve_const_length(ident: &str) -> Option<usize> {
+    CONST_LENGTHS.with(|cell| cell.borrow().get(ident).copied())
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RustType {
@@ -306,6 +334,30 @@ fn len_from_expr(expr: &Expr) -> ParseResult<usize> {
             };
             Ok(size)
         }
+        Expr::Path(path) => {
+            if let Some(ident) = path.path.get_ident() {
+                if let Some(len) = resolve_const_length(&ident.to_string()) {
+                    Ok(len)
+                } else {
+                    Err(ParseError::new(
+                        expr.span(),
+                        format!(
+                            "Array length const '{}' was not resolved. Only integer literals or consts with literal integer values are supported",
+                            ident
+                        ),
+                    ))
+                }
+            } else {
+                Err(ParseError::new(
+                    expr.span(),
+                    format!(
+                        "Expected integer literal for array length, found '{}'",
+                        expr.to_token_stream()
+                    ),
+                ))
+            }
+        }
+        Expr::Paren(paren) => len_from_expr(paren.expr.as_ref()),
         _ => Err(ParseError::new(
             expr.span(),
             format!(

@@ -27,9 +27,11 @@ use shank_macro_impl::{
     parsed_struct::{ParsedStruct, StructAttr},
     parsers::get_derive_attr,
     syn::Item,
+    syn::{Expr, ExprLit, Lit},
     DERIVE_ACCOUNT_ATTR,
     shank_import::ShankImport,
     DERIVE_INSTRUCTION_ATTR,
+    types::with_const_lengths,
 };
 
 // -----------------
@@ -115,47 +117,54 @@ pub fn parse_file(
     let filename = filename.as_ref();
     let ctx = CrateContext::parse(filename)?;
     let import_ctx = resolve_import_context(filename)?;
-    let mut import_cache: ImportCache = HashMap::new();
+    let const_lengths = collect_const_lengths(&ctx);
+    with_const_lengths(const_lengths, || {
+        let mut import_cache: ImportCache = HashMap::new();
 
-    let constants = constants(&ctx)?;
-    let state = state(&ctx)?;
-    let accounts = accounts(&ctx)?;
-    let (types, type_imports) =
-        types(&ctx, &config.detect_custom_struct, &import_ctx, &mut import_cache)?;
-    let instructions = instructions(
-        &ctx,
-        &import_ctx,
-        &type_imports,
-        &mut import_cache,
-    )?;
-    let events = events(&ctx)?;
-    let errors = errors(&ctx)?;
-    let metadata = metadata(
-        &ctx,
-        config.require_program_address,
-        config.program_address_override.as_ref(),
-    )?;
+        let constants = constants(&ctx)?;
+        let state = state(&ctx)?;
+        let accounts = accounts(&ctx)?;
+        let (types, type_imports) = types(
+            &ctx,
+            &config.detect_custom_struct,
+            &import_ctx,
+            &mut import_cache,
+        )?;
+        let instructions = instructions(
+            &ctx,
+            &import_ctx,
+            &type_imports,
+            &mut import_cache,
+        )?;
+        let events = events(&ctx)?;
+        let errors = errors(&ctx)?;
+        let metadata = metadata(
+            &ctx,
+            config.require_program_address,
+            config.program_address_override.as_ref(),
+        )?;
 
-    let mut idl = Idl {
-        version: config.program_version.to_string(),
-        name: config.program_name.to_string(),
-        constants,
-        instructions,
-        state,
-        accounts,
-        types,
-        events,
-        errors,
-        metadata,
-    };
+        let mut idl = Idl {
+            version: config.program_version.to_string(),
+            name: config.program_name.to_string(),
+            constants,
+            instructions,
+            state,
+            accounts,
+            types,
+            events,
+            errors,
+            metadata,
+        };
 
-    // Populate sentinel values for PodOption<CustomType> fields from type definitions
-    populate_pod_option_sentinels(&mut idl)?;
+        // Populate sentinel values for PodOption<CustomType> fields from type definitions
+        populate_pod_option_sentinels(&mut idl)?;
 
-    // Validate that custom types used in PodOption have pod_sentinel defined
-    validate_pod_option_sentinels(&idl)?;
+        // Validate that custom types used in PodOption have pod_sentinel defined
+        validate_pod_option_sentinels(&idl)?;
 
-    Ok(Some(idl))
+        Ok(Some(idl))
+    })
 }
 
 fn accounts(ctx: &CrateContext) -> Result<Vec<IdlTypeDefinition>> {
@@ -638,46 +647,48 @@ fn find_type_definition_in_crate(
 ) -> Result<Option<IdlTypeDefinition>> {
     let lib_path = resolve_lib_path(crate_root)?;
     let ctx = CrateContext::parse(lib_path.clone())?;
-
-    for (file, item) in structs_with_paths(&ctx) {
-        if item.ident != name {
-            continue;
+    let const_lengths = collect_const_lengths(&ctx);
+    with_const_lengths(const_lengths, || {
+        for (file, item) in structs_with_paths(&ctx) {
+            if item.ident != name {
+                continue;
+            }
+            let parsed = ParsedStruct::try_from(&item)
+                .map_err(parse_error_into)
+                .with_context(|| {
+                    format!(
+                        "While parsing struct '{}' in {}",
+                        name,
+                        file.display()
+                    )
+                })?;
+            return Ok(Some(IdlTypeDefinition::try_from(parsed)?));
         }
-        let parsed = ParsedStruct::try_from(&item)
-            .map_err(parse_error_into)
-            .with_context(|| {
-                format!(
-                    "While parsing struct '{}' in {}",
-                    name,
-                    file.display()
-                )
-            })?;
-        return Ok(Some(IdlTypeDefinition::try_from(parsed)?));
-    }
 
-    for (file, item) in enums_with_paths(&ctx) {
-        if item.ident != name {
-            continue;
+        for (file, item) in enums_with_paths(&ctx) {
+            if item.ident != name {
+                continue;
+            }
+            let parsed = ParsedEnum::try_from(&item)
+                .map_err(parse_error_into)
+                .with_context(|| {
+                    format!(
+                        "While parsing enum '{}' in {}",
+                        name,
+                        file.display()
+                    )
+                })?;
+            let name = parsed.ident.to_string();
+            let ty = parsed.try_into()?;
+            return Ok(Some(IdlTypeDefinition {
+                name,
+                ty,
+                pod_sentinel: None,
+            }));
         }
-        let parsed = ParsedEnum::try_from(&item)
-            .map_err(parse_error_into)
-            .with_context(|| {
-                format!(
-                    "While parsing enum '{}' in {}",
-                    name,
-                    file.display()
-                )
-            })?;
-        let name = parsed.ident.to_string();
-        let ty = parsed.try_into()?;
-        return Ok(Some(IdlTypeDefinition {
-            name,
-            ty,
-            pod_sentinel: None,
-        }));
-    }
 
-    Ok(None)
+        Ok(None)
+    })
 }
 
 fn find_instructions_in_crate(
@@ -696,26 +707,29 @@ fn find_instructions_in_crate(
                 crate_root.display()
             )
         })?;
-    let parsed = ParsedEnum::try_from(item)
-        .map_err(parse_error_into)
-        .with_context(|| {
-            format!(
-                "While parsing enum '{}' in {}",
-                enum_name,
-                lib_path.display()
-            )
-        })?;
-    let instruction = Instruction::try_from(&parsed)
-        .map_err(parse_error_into)
-        .with_context(|| {
-            format!(
-                "While building instructions from '{}' in {}",
-                enum_name,
-                lib_path.display()
-            )
-        })?;
-    let idl_instructions: IdlInstructions = instruction.try_into()?;
-    Ok(idl_instructions.0)
+    let const_lengths = collect_const_lengths(&ctx);
+    with_const_lengths(const_lengths, || {
+        let parsed = ParsedEnum::try_from(item)
+            .map_err(parse_error_into)
+            .with_context(|| {
+                format!(
+                    "While parsing enum '{}' in {}",
+                    enum_name,
+                    lib_path.display()
+                )
+            })?;
+        let instruction = Instruction::try_from(&parsed)
+            .map_err(parse_error_into)
+            .with_context(|| {
+                format!(
+                    "While building instructions from '{}' in {}",
+                    enum_name,
+                    lib_path.display()
+                )
+            })?;
+        let idl_instructions: IdlInstructions = instruction.try_into()?;
+        Ok(idl_instructions.0)
+    })
 }
 
 fn rewrite_idl_type(
@@ -810,6 +824,22 @@ fn apply_pod_sentinel_override(
     }
 
     Ok(())
+}
+
+fn collect_const_lengths(ctx: &CrateContext) -> HashMap<String, usize> {
+    let mut map = HashMap::new();
+    for item in ctx.consts() {
+        if let Expr::Lit(ExprLit {
+            lit: Lit::Int(int_lit),
+            ..
+        }) = item.expr.as_ref()
+        {
+            if let Ok(value) = int_lit.base10_parse::<usize>() {
+                map.insert(item.ident.to_string(), value);
+            }
+        }
+    }
+    map
 }
 
 fn metadata(
