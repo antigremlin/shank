@@ -89,10 +89,21 @@ impl ProgramError {
                     desc,
                 })
             }
+            NestedMeta::Meta(Meta::Path(path))
+                if path.is_ident("transparent") =>
+            {
+                Ok(ProgramError {
+                    attr_ident: attr_ident.clone(),
+                    variant_ident: variant_ident.clone(),
+                    code: variant_discriminant,
+                    name: variant_ident.to_string(),
+                    desc: "transparent".to_string(),
+                })
+            }
             _ => Err(ParseError::new_spanned(
                 nested,
                 format!(
-                    "Invalid #[error] attribute on variant '{}': expected string literal, got #[error({})]",
+                    "Invalid #[error] attribute on variant '{}': expected string literal or transparent, got #[error({})]",
                     variant_ident,
                     nested.to_token_stream()
                 ),
