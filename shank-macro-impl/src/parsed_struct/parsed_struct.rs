@@ -77,8 +77,11 @@ impl TryFrom<&Field> for StructField {
             Ok(ty) => ty,
             Err(err) => {
                 return Err(ParseError::new_spanned(
-                    ident,
-                    format!("Failed to parse type for field '{}': {}", ident, err),
+                    ident.clone(),
+                    format!(
+                        "Failed to parse type for field '{}': {}",
+                        ident, err
+                    ),
                 ))
             }
         };
