@@ -20,12 +20,14 @@ use shank_macro_impl::{
     converters::parse_error_into,
     custom_type::{CustomEnum, CustomStruct, DetectCustomTypeConfig},
     error::extract_this_errors,
-    instruction::{extract_instruction_enums, Instruction},
+    instruction::Instruction,
     krate::CrateContext,
     macros::ProgramId,
     parsed_enum::ParsedEnum,
     parsed_struct::{ParsedStruct, StructAttr},
     parsers::get_derive_attr,
+    syn::Item,
+    DERIVE_ACCOUNT_ATTR,
     shank_import::ShankImport,
     DERIVE_INSTRUCTION_ATTR,
 };
@@ -69,6 +71,36 @@ type TypeImportMap = HashMap<String, HashMap<String, String>>;
 struct ImportContext {
     root: PathBuf,
     manifest: Option<WithPath<Manifest>>,
+}
+
+fn structs_with_paths(
+    ctx: &CrateContext,
+) -> Vec<(PathBuf, shank_macro_impl::syn::ItemStruct)> {
+    let mut items = Vec::new();
+    for module in ctx.modules() {
+        let file = module.detail.file.clone();
+        for item in &module.detail.items {
+            if let Item::Struct(strct) = item {
+                items.push((file.clone(), strct.clone()));
+            }
+        }
+    }
+    items
+}
+
+fn enums_with_paths(
+    ctx: &CrateContext,
+) -> Vec<(PathBuf, shank_macro_impl::syn::ItemEnum)> {
+    let mut items = Vec::new();
+    for module in ctx.modules() {
+        let file = module.detail.file.clone();
+        for item in &module.detail.items {
+            if let Item::Enum(enm) = item {
+                items.push((file.clone(), enm.clone()));
+            }
+        }
+    }
+    items
 }
 
 // -----------------
@@ -127,12 +159,23 @@ pub fn parse_file(
 }
 
 fn accounts(ctx: &CrateContext) -> Result<Vec<IdlTypeDefinition>> {
-    let account_structs = extract_account_structs(ctx.structs())?;
-
     let mut accounts: Vec<IdlTypeDefinition> = Vec::new();
-    for strct in account_structs {
-        let idl_def: IdlTypeDefinition = strct.try_into()?;
-        accounts.push(idl_def);
+    for (file, strct) in structs_with_paths(ctx) {
+        if get_derive_attr(&strct.attrs, DERIVE_ACCOUNT_ATTR).is_none() {
+            continue;
+        }
+        let parsed = extract_account_structs(std::iter::once(&strct))
+            .with_context(|| {
+                format!(
+                    "While parsing ShankAccount '{}' in {}",
+                    strct.ident,
+                    file.display()
+                )
+            })?;
+        for parsed_struct in parsed {
+            let idl_def: IdlTypeDefinition = parsed_struct.try_into()?;
+            accounts.push(idl_def);
+        }
     }
     Ok(accounts)
 }
@@ -147,13 +190,21 @@ fn instructions(
     let mut seen = HashSet::new();
     let mut local_enums = Vec::new();
 
-    for item_enum in ctx.enums() {
-        if get_derive_attr(&item_enum.attrs, DERIVE_INSTRUCTION_ATTR).is_none() {
+    for (file, item_enum) in enums_with_paths(ctx) {
+        if get_derive_attr(&item_enum.attrs, DERIVE_INSTRUCTION_ATTR).is_none()
+        {
             continue;
         }
 
-        let import =
-            ShankImport::from_attrs(&item_enum.attrs).map_err(parse_error_into)?;
+        let import = ShankImport::from_attrs(&item_enum.attrs)
+            .map_err(parse_error_into)
+            .with_context(|| {
+                format!(
+                    "While parsing ShankInstruction '{}' in {}",
+                    item_enum.ident,
+                    file.display()
+                )
+            })?;
         if let Some(import) = import {
             let renames = type_imports.get(&import.import_from);
             let imported = resolve_imported_instructions(
@@ -162,7 +213,14 @@ fn instructions(
                 &item_enum.ident.to_string(),
                 renames,
                 cache,
-            )?;
+            )
+            .with_context(|| {
+                format!(
+                    "While importing instructions for '{}' from {}",
+                    item_enum.ident,
+                    import.import_from
+                )
+            })?;
             for ix in imported {
                 if !seen.insert(ix.name.clone()) {
                     bail!("Duplicate instruction '{}'", ix.name);
@@ -170,23 +228,31 @@ fn instructions(
                 instructions.push(ix);
             }
         } else {
-            local_enums.push(item_enum);
+            local_enums.push((file, item_enum));
         }
     }
-
-    let instruction_enums =
-        extract_instruction_enums(local_enums.into_iter()).map_err(parse_error_into)?;
 
     // TODO(thlorenz): Should we enforce only one Instruction Enum Arg?
     // TODO(thlorenz): Should unfold that only arg?
     // TODO(thlorenz): Better way to combine those if we don't do the above.
-    for ix in instruction_enums {
-        let idl_instructions: IdlInstructions = ix.try_into()?;
-        for ix in idl_instructions.0 {
-            if !seen.insert(ix.name.clone()) {
-                bail!("Duplicate instruction '{}'", ix.name);
+    for (file, item_enum) in local_enums {
+        let maybe_ix = Instruction::try_from_item_enum(&item_enum, false)
+            .map_err(parse_error_into)
+            .with_context(|| {
+                format!(
+                    "While parsing ShankInstruction '{}' in {}",
+                    item_enum.ident,
+                    file.display()
+                )
+            })?;
+        if let Some(ix) = maybe_ix {
+            let idl_instructions: IdlInstructions = ix.try_into()?;
+            for ix in idl_instructions.0 {
+                if !seen.insert(ix.name.clone()) {
+                    bail!("Duplicate instruction '{}'", ix.name);
+                }
+                instructions.push(ix);
             }
-            instructions.push(ix);
         }
     }
     Ok(instructions)
@@ -209,23 +275,45 @@ fn types(
     import_ctx: &ImportContext,
     cache: &mut ImportCache,
 ) -> Result<(Vec<IdlTypeDefinition>, TypeImportMap)> {
-    let custom_structs = ctx
-        .structs()
-        .filter(|x| detect_custom_type.are_custom_type_attrs(&x.attrs))
-        .map(|x| CustomStruct::try_from(x).map_err(parse_error_into))
-        .collect::<Result<Vec<CustomStruct>>>()?;
+    let mut custom_structs = Vec::new();
+    for (file, item) in structs_with_paths(ctx) {
+        if !detect_custom_type.are_custom_type_attrs(&item.attrs) {
+            continue;
+        }
+        let strct = CustomStruct::try_from(&item)
+            .map_err(parse_error_into)
+            .with_context(|| {
+                format!(
+                    "While parsing ShankType struct '{}' in {}",
+                    item.ident,
+                    file.display()
+                )
+            })?;
+        custom_structs.push((file, strct));
+    }
 
-    let custom_enums = ctx
-        .enums()
-        .filter(|x| detect_custom_type.are_custom_type_attrs(&x.attrs))
-        .map(|x| CustomEnum::try_from(x).map_err(parse_error_into))
-        .collect::<Result<Vec<CustomEnum>>>()?;
+    let mut custom_enums = Vec::new();
+    for (file, item) in enums_with_paths(ctx) {
+        if !detect_custom_type.are_custom_type_attrs(&item.attrs) {
+            continue;
+        }
+        let enm = CustomEnum::try_from(&item)
+            .map_err(parse_error_into)
+            .with_context(|| {
+                format!(
+                    "While parsing ShankType enum '{}' in {}",
+                    item.ident,
+                    file.display()
+                )
+            })?;
+        custom_enums.push((file, enm));
+    }
 
     let mut seen = HashSet::new();
     let mut types = Vec::new();
     let mut type_imports: TypeImportMap = HashMap::new();
 
-    for strct in custom_structs {
+    for (file, strct) in custom_structs {
         let name = strct.ident.to_string();
         let type_def = if let Some(import) = &strct.import {
             register_type_import(&mut type_imports, import, &name);
@@ -239,7 +327,13 @@ fn types(
             apply_pod_sentinel_override(&mut imported, &strct)?;
             imported
         } else {
-            IdlTypeDefinition::try_from(strct)?
+            IdlTypeDefinition::try_from(strct).with_context(|| {
+                format!(
+                    "While converting ShankType struct '{}' from {} to IDL",
+                    name,
+                    file.display()
+                )
+            })?
         };
 
         if !seen.insert(type_def.name.clone()) {
@@ -248,7 +342,7 @@ fn types(
         types.push(type_def);
     }
 
-    for enm in custom_enums {
+    for (file, enm) in custom_enums {
         let name = enm.ident.to_string();
         let type_def = if let Some(import) = &enm.import {
             register_type_import(&mut type_imports, import, &name);
@@ -260,7 +354,13 @@ fn types(
                 cache,
             )?
         } else {
-            IdlTypeDefinition::try_from(enm)?
+            IdlTypeDefinition::try_from(enm).with_context(|| {
+                format!(
+                    "While converting ShankType enum '{}' from {} to IDL",
+                    name,
+                    file.display()
+                )
+            })?
         };
 
         if !seen.insert(type_def.name.clone()) {
@@ -269,12 +369,19 @@ fn types(
         types.push(type_def);
     }
 
-    for item_enum in ctx.enums() {
+    for (file, item_enum) in enums_with_paths(ctx) {
         if get_derive_attr(&item_enum.attrs, DERIVE_INSTRUCTION_ATTR).is_none() {
             continue;
         }
-        let import =
-            ShankImport::from_attrs(&item_enum.attrs).map_err(parse_error_into)?;
+        let import = ShankImport::from_attrs(&item_enum.attrs)
+            .map_err(parse_error_into)
+            .with_context(|| {
+                format!(
+                    "While parsing ShankInstruction '{}' in {}",
+                    item_enum.ident,
+                    file.display()
+                )
+            })?;
         let import = match import {
             Some(import) => import,
             None => continue,
@@ -287,7 +394,14 @@ fn types(
             &name,
             type_imports.get(&import.import_from),
             cache,
-        )?;
+        )
+        .with_context(|| {
+            format!(
+                "While importing type definition '{}' from {}",
+                name,
+                import.import_from
+            )
+        })?;
         if !seen.insert(type_def.name.clone()) {
             bail!("Duplicate type definition '{}'", type_def.name);
         }
@@ -518,12 +632,28 @@ fn find_type_definition_in_crate(
     let ctx = CrateContext::parse(lib_path)?;
 
     if let Some(item) = ctx.structs().find(|s| s.ident == name) {
-        let parsed = ParsedStruct::try_from(item).map_err(parse_error_into)?;
+        let parsed = ParsedStruct::try_from(item)
+            .map_err(parse_error_into)
+            .with_context(|| {
+                format!(
+                    "While parsing struct '{}' in {}",
+                    name,
+                    lib_path.display()
+                )
+            })?;
         return Ok(Some(IdlTypeDefinition::try_from(parsed)?));
     }
 
     if let Some(item) = ctx.enums().find(|e| e.ident == name) {
-        let parsed = ParsedEnum::try_from(item).map_err(parse_error_into)?;
+        let parsed = ParsedEnum::try_from(item)
+            .map_err(parse_error_into)
+            .with_context(|| {
+                format!(
+                    "While parsing enum '{}' in {}",
+                    name,
+                    lib_path.display()
+                )
+            })?;
         let name = parsed.ident.to_string();
         let ty = parsed.try_into()?;
         return Ok(Some(IdlTypeDefinition {
@@ -552,8 +682,24 @@ fn find_instructions_in_crate(
                 crate_root.display()
             )
         })?;
-    let parsed = ParsedEnum::try_from(item).map_err(parse_error_into)?;
-    let instruction = Instruction::try_from(&parsed).map_err(parse_error_into)?;
+    let parsed = ParsedEnum::try_from(item)
+        .map_err(parse_error_into)
+        .with_context(|| {
+            format!(
+                "While parsing enum '{}' in {}",
+                enum_name,
+                lib_path.display()
+            )
+        })?;
+    let instruction = Instruction::try_from(&parsed)
+        .map_err(parse_error_into)
+        .with_context(|| {
+            format!(
+                "While building instructions from '{}' in {}",
+                enum_name,
+                lib_path.display()
+            )
+        })?;
     let idl_instructions: IdlInstructions = instruction.try_into()?;
     Ok(idl_instructions.0)
 }
