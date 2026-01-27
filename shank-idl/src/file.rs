@@ -576,7 +576,15 @@ fn resolve_dependency_root(
     import_from: &str,
 ) -> Option<PathBuf> {
     let manifest = import_ctx.manifest.as_ref()?;
-    let dep_path = manifest.dependency_path(import_from)?;
+    let dep_path = manifest
+        .dependency_path(import_from)
+        .or_else(|| {
+            if import_from.contains('_') {
+                manifest.dependency_path(&import_from.replace('_', "-"))
+            } else {
+                None
+            }
+        })?;
     let manifest_dir = manifest.path().parent()?;
     Some(manifest_dir.join(dep_path))
 }
