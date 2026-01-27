@@ -19,7 +19,7 @@ use shank_macro_impl::{
     account::extract_account_structs,
     converters::parse_error_into,
     custom_type::{CustomEnum, CustomStruct, DetectCustomTypeConfig},
-    error::extract_this_errors,
+    error::{ProgramErrors, DERIVE_THIS_ERROR_ATTR},
     instruction::Instruction,
     krate::CrateContext,
     macros::ProgramId,
@@ -839,7 +839,32 @@ fn events(_ctx: &CrateContext) -> Result<Option<Vec<IdlEvent>>> {
 }
 
 fn errors(ctx: &CrateContext) -> Result<Option<Vec<IdlErrorCode>>> {
-    let program_errors = extract_this_errors(ctx.enums())?;
+    let mut program_errors = Vec::new();
+    for (file, item_enum) in enums_with_paths(ctx) {
+        if get_derive_attr(&item_enum.attrs, DERIVE_THIS_ERROR_ATTR).is_none()
+        {
+            continue;
+        }
+        let parsed = ParsedEnum::try_from(&item_enum)
+            .map_err(parse_error_into)
+            .with_context(|| {
+                format!(
+                    "While parsing error enum '{}' in {}",
+                    item_enum.ident,
+                    file.display()
+                )
+            })?;
+        let errors = ProgramErrors::try_from(&parsed)
+            .map_err(parse_error_into)
+            .with_context(|| {
+                format!(
+                    "While parsing #[error] attributes for enum '{}' in {}",
+                    item_enum.ident,
+                    file.display()
+                )
+            })?;
+        program_errors.extend(errors.0);
+    }
     if program_errors.is_empty() {
         Ok(None)
     } else {
