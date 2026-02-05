@@ -39,7 +39,7 @@ pub fn render_args_comments(
         .flatten()
         .filter(|x| !exclude_program_id || x.name != "program_id")
         .map(|SeedArg { name, desc, ty }| {
-            format!("/// * **{}**: {} | [{}] ", name, desc, ty.ident)
+            format!("* **{}**: {} | [{}] ", name, desc, ty.ident)
         })
         .collect()
 }
