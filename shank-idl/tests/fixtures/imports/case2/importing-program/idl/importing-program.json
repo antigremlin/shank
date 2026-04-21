@@ -1,0 +1,78 @@
+{
+  "version": "",
+  "name": "",
+  "instructions": [],
+  "accounts": [
+    {
+      "name": "Outbox",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "localDomain",
+            "type": "u32"
+          },
+          {
+            "name": "outboxBumpSeed",
+            "type": "u8"
+          },
+          {
+            "name": "owner",
+            "type": {
+              "option": {
+                "array": [
+                  "u8",
+                  32
+                ]
+              }
+            }
+          },
+          {
+            "name": "tree",
+            "type": {
+              "defined": "MerkleTreeProxy"
+            },
+            "attrs": [
+              "idl-type"
+            ]
+          },
+          {
+            "name": "maxProtocolFee",
+            "type": "u64"
+          }
+        ]
+      }
+    }
+  ],
+  "types": [
+    {
+      "name": "MerkleTreeProxy",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "branch",
+            "type": {
+              "array": [
+                {
+                  "array": [
+                    "u8",
+                    32
+                  ]
+                },
+                32
+              ]
+            }
+          },
+          {
+            "name": "count",
+            "type": "u64"
+          }
+        ]
+      }
+    }
+  ],
+  "metadata": {
+    "origin": "shank"
+  }
+}

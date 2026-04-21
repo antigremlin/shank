@@ -1,0 +1,139 @@
+{
+  "version": "",
+  "name": "",
+  "instructions": [
+    {
+      "name": "Init",
+      "accounts": [],
+      "args": [
+        {
+          "name": "init",
+          "type": {
+            "defined": "InitProxy"
+          }
+        }
+      ],
+      "discriminant": {
+        "type": "u8",
+        "value": 0
+      }
+    },
+    {
+      "name": "TransferRemote",
+      "accounts": [],
+      "args": [
+        {
+          "name": "transferRemote",
+          "type": {
+            "defined": "TransferRemoteProxy"
+          }
+        }
+      ],
+      "discriminant": {
+        "type": "u8",
+        "value": 1
+      }
+    },
+    {
+      "name": "Custom",
+      "accounts": [],
+      "args": [
+        {
+          "name": "args",
+          "type": "u64"
+        }
+      ],
+      "discriminant": {
+        "type": "u8",
+        "value": 0
+      }
+    },
+    {
+      "name": "Base",
+      "accounts": [],
+      "args": [
+        {
+          "name": "tokenInstructionProxy",
+          "type": {
+            "defined": "TokenInstructionProxy"
+          }
+        }
+      ],
+      "discriminant": {
+        "type": "u8",
+        "value": 1
+      }
+    }
+  ],
+  "types": [
+    {
+      "name": "InitProxy",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "mailbox",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "decimals",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "TransferRemoteProxy",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "destinationDomain",
+            "type": "u32"
+          },
+          {
+            "name": "recipient",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "TokenInstructionProxy",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "Init",
+            "fields": [
+              {
+                "defined": "InitProxy"
+              }
+            ]
+          },
+          {
+            "name": "TransferRemote",
+            "fields": [
+              {
+                "defined": "TransferRemoteProxy"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "metadata": {
+    "origin": "shank"
+  }
+}

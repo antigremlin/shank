@@ -1,0 +1,54 @@
+{
+  "version": "",
+  "name": "",
+  "instructions": [],
+  "types": [
+    {
+      "name": "RemoteRouterConfigProxy",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "domain",
+            "type": "u32"
+          },
+          {
+            "name": "router",
+            "type": {
+              "option": {
+                "array": [
+                  "u8",
+                  32
+                ]
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "LocalConfig",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "remote",
+            "type": {
+              "defined": "RemoteRouterConfigProxy"
+            },
+            "attrs": [
+              "idl-type"
+            ]
+          },
+          {
+            "name": "count",
+            "type": "u64"
+          }
+        ]
+      }
+    }
+  ],
+  "metadata": {
+    "origin": "shank"
+  }
+}
