@@ -97,6 +97,26 @@ impl Manifest {
         }
     }
 
+    pub fn dependency_path(&self, name: &str) -> Option<PathBuf> {
+        fn find_path(
+            deps: &cargo_toml::DepsSet,
+            name: &str,
+        ) -> Option<PathBuf> {
+            let dep = deps.get(name)?;
+            match dep {
+                cargo_toml::Dependency::Detailed(details) => {
+                    details.path.as_ref().map(PathBuf::from)
+                }
+                cargo_toml::Dependency::Simple(_) => None,
+                cargo_toml::Dependency::Inherited(_) => None,
+            }
+        }
+
+        find_path(&self.dependencies, name)
+            .or_else(|| find_path(&self.dev_dependencies, name))
+            .or_else(|| find_path(&self.build_dependencies, name))
+    }
+
     // Climbs each parent directory from a given starting directory until we find a Cargo.toml.
     pub fn discover_from_path(
         start_from: PathBuf,

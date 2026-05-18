@@ -155,3 +155,33 @@ fn type_valid_single_enum_shank_type() {
 
     assert_eq!(idl, expected_idl);
 }
+
+#[test]
+fn type_proxy_struct_import() {
+    let file = fixtures_dir().join("import_proxy_struct.rs");
+    let idl = parse_file(file, &ParseIdlConfig::optional_program_address())
+        .expect("Parsing should not fail")
+        .expect("File contains IDL");
+
+    let expected_idl: Idl = serde_json::from_str(include_str!(
+        "./fixtures/types/import_proxy_struct.json"
+    ))
+    .unwrap();
+
+    assert_eq!(idl, expected_idl);
+}
+
+#[test]
+fn type_proxy_enum_import() {
+    let file = fixtures_dir().join("import_proxy_enum.rs");
+    let idl = parse_file(file, &ParseIdlConfig::optional_program_address())
+        .expect("Parsing should not fail")
+        .expect("File contains IDL");
+
+    let expected_idl: Idl = serde_json::from_str(include_str!(
+        "./fixtures/types/import_proxy_enum.json"
+    ))
+    .unwrap();
+
+    assert_eq!(idl, expected_idl);
+}

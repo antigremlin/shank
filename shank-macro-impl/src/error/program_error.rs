@@ -1,6 +1,7 @@
 use std::convert::TryFrom;
 
 use proc_macro2::Span;
+use quote::ToTokens;
 
 use syn::{
     punctuated::Punctuated, Attribute, Error as ParseError, Ident, Lit, Meta,
@@ -51,7 +52,11 @@ impl ProgramError {
             }
             Meta::Path(_) | Meta::NameValue(_) => Err(ParseError::new_spanned(
                 attr,
-                "#[error] attr requires list of arguments",
+                format!(
+                    "Invalid #[error] attribute on variant '{}': expected #[error(\"...\")], got #[error({})]",
+                    variant_ident,
+                    meta.to_token_stream()
+                ),
             )),
         }
     }
@@ -65,7 +70,11 @@ impl ProgramError {
         if nested.len() != 1 {
             return Err(ParseError::new_spanned(
                 nested,
-                "shank supports only #[error]s with exactly the error message string",
+                format!(
+                    "Invalid #[error] attribute on variant '{}': expected exactly one string literal, got #[error({})]",
+                    variant_ident,
+                    nested.to_token_stream()
+                ),
             ));
         }
         let meta = &nested[0];
@@ -80,9 +89,24 @@ impl ProgramError {
                     desc,
                 })
             }
+            NestedMeta::Meta(Meta::Path(path))
+                if path.is_ident("transparent") =>
+            {
+                Ok(ProgramError {
+                    attr_ident: attr_ident.clone(),
+                    variant_ident: variant_ident.clone(),
+                    code: variant_discriminant,
+                    name: variant_ident.to_string(),
+                    desc: "transparent".to_string(),
+                })
+            }
             _ => Err(ParseError::new_spanned(
                 nested,
-                "shank supports only #[error]s with exactly the error message string",
+                format!(
+                    "Invalid #[error] attribute on variant '{}': expected string literal or transparent, got #[error({})]",
+                    variant_ident,
+                    nested.to_token_stream()
+                ),
             )),
         }
     }

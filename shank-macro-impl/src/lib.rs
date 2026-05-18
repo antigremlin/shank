@@ -10,6 +10,7 @@ pub mod parsed_enum;
 pub mod parsed_macro;
 pub mod parsed_struct;
 pub mod parsers;
+pub mod shank_import;
 pub mod types;
 
 pub const DERIVE_ACCOUNT_ATTR: &str = "ShankAccount";

@@ -5,7 +5,10 @@ use syn::{
     Result as ParseResult, Variant,
 };
 
-use crate::types::RustType;
+use crate::{
+    parsed_struct::{StructFieldAttr, StructFieldAttrs},
+    types::RustType,
+};
 
 // -----------------
 // Enum Variant
@@ -75,6 +78,28 @@ impl TryFrom<(usize, usize, &Variant)> for ParsedEnumVariant {
             discriminant,
             attrs: variant.attrs.clone(),
         })
+    }
+}
+
+impl ParsedEnumVariant {
+    pub fn idl_type_override(&self) -> ParseResult<Option<RustType>> {
+        let attrs = StructFieldAttrs::try_from(self.attrs.as_slice())?.0;
+        let mut overrides = attrs.into_iter().filter_map(|attr| {
+            if let StructFieldAttr::IdlType(ty) = attr {
+                Some(ty)
+            } else {
+                None
+            }
+        });
+
+        let first = overrides.next();
+        if overrides.next().is_some() {
+            return Err(ParseError::new_spanned(
+                &self.ident,
+                "Only one idl_type attribute is allowed per enum variant",
+            ));
+        }
+        Ok(first)
     }
 }
 

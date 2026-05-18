@@ -1,7 +1,9 @@
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::{convert::TryFrom, ops::Deref};
 
-use quote::format_ident;
+use quote::{format_ident, ToTokens};
 use syn::{
     spanned::Spanned, AngleBracketedGenericArguments, Expr, ExprLit,
     GenericArgument, Ident, Lit, Path, PathArguments, PathSegment, Type,
@@ -10,6 +12,32 @@ use syn::{
 
 use super::{Composite, ParsedReference, Primitive, TypeKind, Value};
 use syn::{Error as ParseError, Result as ParseResult};
+
+thread_local! {
+    static CONST_LENGTHS: RefCell<HashMap<String, usize>> = RefCell::new(HashMap::new());
+}
+
+pub fn with_const_lengths<F, R>(lengths: HashMap<String, usize>, f: F) -> R
+where
+    F: FnOnce() -> R,
+{
+    CONST_LENGTHS.with(|cell| {
+        let mut map = cell.borrow_mut();
+        let previous = std::mem::take(&mut *map);
+        *map = lengths;
+        drop(map);
+
+        let result = f();
+
+        let mut map = cell.borrow_mut();
+        *map = previous;
+        result
+    })
+}
+
+fn resolve_const_length(ident: &str) -> Option<usize> {
+    CONST_LENGTHS.with(|cell| cell.borrow().get(ident).copied())
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RustType {
@@ -306,9 +334,36 @@ fn len_from_expr(expr: &Expr) -> ParseResult<usize> {
             };
             Ok(size)
         }
+        Expr::Path(path) => {
+            if let Some(ident) = path.path.get_ident() {
+                if let Some(len) = resolve_const_length(&ident.to_string()) {
+                    Ok(len)
+                } else {
+                    Err(ParseError::new(
+                        expr.span(),
+                        format!(
+                            "Array length const '{}' was not resolved. Only integer literals or consts with literal integer values are supported",
+                            ident
+                        ),
+                    ))
+                }
+            } else {
+                Err(ParseError::new(
+                    expr.span(),
+                    format!(
+                        "Expected integer literal for array length, found '{}'",
+                        expr.to_token_stream()
+                    ),
+                ))
+            }
+        }
+        Expr::Paren(paren) => len_from_expr(paren.expr.as_ref()),
         _ => Err(ParseError::new(
             expr.span(),
-            "Expected a Lit(ExprLit(Int)) expression when extracting length",
+            format!(
+                "Expected integer literal for array length, found '{}'",
+                expr.to_token_stream()
+            ),
         )),
     }
 }
@@ -340,24 +395,11 @@ pub fn resolve_rust_ty(
             (ident, kind)
         }
         Type::Array(TypeArray { elem, len, .. }) => {
-            let (inner_ident, inner_kind) = match elem.deref() {
-                Type::Path(TypePath { path, .. }) => {
-                    ident_and_kind_from_path(path)
-                }
-                _ => {
-                    return Err(ParseError::new(
-                        ty.span(),
-                        "Only owned or reference Path/Array types supported",
-                    ));
-                }
-            };
+            let inner_ty = resolve_rust_ty(
+                elem.deref(),
+                RustTypeContext::CollectionItem,
+            )?;
             let len = len_from_expr(len)?;
-            let inner_ty = RustType {
-                kind: inner_kind,
-                ident: inner_ident,
-                reference: ParsedReference::Owned,
-                context: RustTypeContext::CollectionItem,
-            };
             let kind =
                 TypeKind::Composite(Composite::Array(len), vec![inner_ty]);
             (format_ident!("Array"), kind)

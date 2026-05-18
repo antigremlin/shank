@@ -1,5 +1,5 @@
 use proc_macro2::{Span, TokenStream};
-use quote::{quote, ToTokens};
+use quote::quote;
 use shank_macro_impl::{
     parsed_struct::{ProcessedSeed, Seed},
     syn::Ident,
@@ -34,26 +34,17 @@ pub fn render_pda_fn(
     };
     let (pda_comments, pda_with_bump_comments) = if include_comments {
         let args_comments = render_args_comments(processed_seeds, true);
+        let pda_doc = format!(
+            " Derives the PDA for this account.\n\n * **program_id**: The id of the program\n {}",
+            args_comments.join("\n ")
+        );
+        let pda_with_bump_doc = format!(
+            " Derives the PDA for this account allowing to provide a bump seed.\n\n * **program_id**: The id of the program\n {}\n * **bump**: the bump seed to pass when deriving the PDA",
+            args_comments.join("\n ")
+        );
         (
-            format!(
-                r#"
-                /// Derives the PDA for this account.
-                ///
-                /// * **program_id**: The id of the program
-                {}"#,
-                args_comments.join("\n")
-            )
-            .to_token_stream(),
-            format!(
-                r#"
-                /// Derives the PDA for this account allowing to provide a bump seed.
-                ///
-                /// * **program_id**: The id of the program
-                {}
-                /// * **bump**: the bump seed to pass when deriving the PDA"#,
-                args_comments.join("\n")
-            )
-            .to_token_stream(),
+            quote! { #[doc = #pda_doc] },
+            quote! { #[doc = #pda_with_bump_doc] },
         )
     } else {
         (TokenStream::new(), TokenStream::new())

@@ -3,6 +3,7 @@ use std::convert::TryFrom;
 use syn::{Attribute, Error as ParseError, ItemEnum, Result as ParseResult};
 
 use super::ParsedEnumVariant;
+use crate::shank_import::ShankImport;
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct ParsedEnum {
@@ -14,6 +15,9 @@ pub struct ParsedEnum {
 
     /// Attributes found on the enum
     pub attrs: Vec<Attribute>,
+
+    /// Shank import metadata for proxy enums
+    pub import: Option<ShankImport>,
 }
 
 impl TryFrom<&ItemEnum> for ParsedEnum {
@@ -44,11 +48,13 @@ impl TryFrom<&ItemEnum> for ParsedEnum {
                 parsed
             })
             .collect::<ParseResult<Vec<ParsedEnumVariant>>>()?;
+        let import = ShankImport::from_attrs(attrs.as_slice())?;
 
         Ok(ParsedEnum {
             ident: ident.clone(),
             variants,
             attrs: attrs.clone(),
+            import,
         })
     }
 }
